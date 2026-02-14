@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and fill in values
+aws_region  = "us-east-1"
+aws_profile = "agentcore-demo"
+project_name = "devops-copilot"
+agent_image_tag = "latest"
+
+# Set this to your public AgentGateway endpoint (e.g. ngrok URL)
+agentgateway_endpoint = "https://your-agentgateway.ngrok-free.app"
+
+# Okta OIDC discovery URL (for future OAuth2 integration)
+okta_discovery_url = "https://your-org.okta.com/.well-known/openid-configuration"
+
+tags = {
+  Project     = "agentcore-demo"
+  Environment = "dev"
+  ManagedBy   = "terraform"
+}
