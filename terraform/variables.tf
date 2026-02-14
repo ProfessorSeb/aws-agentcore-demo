@@ -49,6 +49,12 @@ variable "okta_api_token" {
   sensitive   = true
 }
 
+variable "agentgateway_llm_endpoint" {
+  description = "Public HTTPS endpoint for AgentGateway LLM proxy (e.g. ngrok URL)"
+  type        = string
+  default     = "https://llm-agentgateway.ngrok.app"
+}
+
 variable "agent_redirect_uri" {
   description = "OAuth2 redirect URI for the user-facing app"
   type        = string
