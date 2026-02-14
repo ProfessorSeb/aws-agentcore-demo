@@ -1,83 +1,100 @@
 # AWS Bedrock AgentCore + AgentGateway + Okta Demo
 
+> **Why a gateway?** AI agents calling LLMs and tools directly means no visibility, no security policies, and no cost control. This demo puts [AgentGateway](https://github.com/agentgateway/agentgateway) between your agents and everything they talk to — giving you the same governance for AI that API gateways gave to microservices. [Read the full writeup →](docs/blog-why-agent-gateway.md)
+
 Deploy a **DevOps Copilot** agent on AWS Bedrock AgentCore with:
-- **AgentGateway** for LLM proxy + MCP tool access (with tracing, rate limiting, security policies)
-- **Okta** for OAuth2 identity (on-behalf-of auth flow)
-- **ngrok** for secure tunneling to on-prem k8s-rooster cluster
+- **[AgentGateway](https://github.com/agentgateway/agentgateway)** — LLM proxy + MCP tool gateway with tracing, rate limiting, PII protection, and prompt injection guards
+- **[Okta](https://developer.okta.com)** — OAuth2 identity with on-behalf-of token flow
+- **[ngrok](https://ngrok.com)** — secure tunneling from AWS to on-prem Kubernetes
+- **[Langfuse](https://langfuse.com)** + **ClickHouse** — dual-export observability (LLM traces + gateway metrics)
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│           AWS Bedrock AgentCore         │
-│  ┌─────────────────────────────────┐    │
-│  │     Agent Hosting Runtime       │    │
-│  │  ┌───────────────────────────┐  │    │
-│  │  │    DevOps Copilot Agent   │  │    │
-│  │  │         (Python)          │  │    │
-│  │  └──────┬──────────┬─────────┘  │    │
-│  └─────────┼──────────┼────────────┘    │
-│            │          │                 │
-│     mTLS + │    AUTH   │                │
-│     API key│ Mechanism │                │
-└────────────┼──────────┼────────────────┘
-             │          │
-     ┌───────▼──┐  ┌────▼──────────┐     ┌──────────┐
-     │agentgw   │  │  agentgw      │     │          │
-     │  LLM     │  │  MCP/Tools    │     │  OKTA    │
-     │(Anthropic│  │(Slack/GitHub) │◄────│  (JWT)   │
-     │ OpenAI)  │  │               │     │          │
-     └────┬─────┘  └──────┬────────┘     └──────────┘
-          │               │
-     ┌────▼─────┐   ┌─────▼──────┐
-     │  LLMs    │   │   Tools    │
-     │Claude,GPT│   │Slack,GitHub│
-     └──────────┘   └────────────┘
+┌──────────────────────────────────────────────────┐
+│        AWS Bedrock AgentCore (us-east-1)         │
+│                                                  │
+│   ┌──────────────────────────────────────────┐   │
+│   │         DevOps Copilot Agent             │   │
+│   │         (Python / FastAPI / arm64)       │   │
+│   │                                          │   │
+│   │   POST /invocations                      │   │
+│   │     → Discover MCP tools                 │   │
+│   │     → Call LLM (via AgentGateway)        │   │
+│   │     → Execute tool calls (via MCP)       │   │
+│   │     → Return response                   │   │
+│   └───────────┬──────────────┬───────────────┘   │
+│               │              │                   │
+│   ┌───────────▼──┐   ┌──────▼───────────────┐   │
+│   │  Runtime     │   │  Gateway (MCP)       │   │
+│   │  Endpoint    │   │  Okta CUSTOM_JWT     │   │
+│   └──────────────┘   └──────────┬───────────┘   │
+└──────────────────────────────────┼───────────────┘
+                                   │
+              ┌────────────────────┼────────────────┐
+              │   ngrok Tunnels    │                 │
+              │   mcp: → :30168   │   llm: → :31572 │
+              └────────────────────┼────────────────┘
+                                   │
+              ┌────────────────────▼────────────────┐
+              │   k8s-rooster (Talos + ArgoCD)      │
+              │                                     │
+              │   AgentGateway                      │
+              │   ├─ LLM:  /anthropic/* → Claude    │
+              │   │        /openai/*   → GPT        │
+              │   ├─ MCP:  /mcp        → Everything │
+              │   │        /mcp/slack  → Slack      │
+              │   │        /mcp-github → GitHub     │
+              │   ├─ Policies: PII, injection,      │
+              │   │   credential leak, rate limits   │
+              │   └─ Traces: → Langfuse + ClickHouse│
+              └─────────────────────────────────────┘
 ```
 
 ## What's Deployed
 
-| Component | Details |
-|---|---|
-| **Okta** | 2 OAuth2 apps, 3 MCP scopes (`mcp:read`, `mcp:write`, `mcp:admin`), auth server policy |
-| **AWS Gateway** | AgentCore MCP gateway with Okta CUSTOM_JWT authorizer |
-| **Gateway Target** | Points to AgentGateway MCP endpoint via ngrok |
-| **Agent Runtime** | arm64 container on AgentCore (FastAPI + httpx) |
-| **IAM Roles** | Gateway role + Runtime role (Bedrock, ECR, CloudWatch, Secrets Manager) |
-| **ECR** | `devops-copilot-agent` repository |
-| **ngrok Tunnels** | `mcp-agentgateway.ngrok.app` (MCP) + `llm-agentgateway.ngrok.app` (LLM) |
+| Layer | Component | Details |
+|-------|-----------|---------|
+| **Identity** | Okta | 2 OAuth2 apps, custom scopes (`mcp:read/write/admin`), auth server policy |
+| **Hosting** | AgentCore Runtime | arm64 container, FastAPI agent with LLM + MCP loop |
+| **Routing** | AgentCore Gateway | MCP protocol gateway with Okta CUSTOM_JWT authorizer |
+| **Tunneling** | ngrok | 2 static domains → on-prem k8s (MCP + LLM) |
+| **Governance** | AgentGateway | LLM proxy + MCP gateway with security policies |
+| **Observability** | Langfuse + ClickHouse | Dual OTel export via fan-out collector |
+| **Infra** | Terraform + ArgoCD | AWS/Okta via TF, k8s via ArgoCD GitOps |
+
+## Guardrails
+
+AgentGateway enforces these policies on every request:
+
+| Category | Policy | What It Does |
+|----------|--------|-------------|
+| **Security** | PII Protection | Detects/redacts PII before it reaches the LLM |
+| **Security** | Prompt Injection Guard | Blocks jailbreak and manipulation attempts |
+| **Security** | Credential Leak Protection | Prevents API keys/tokens from leaking in responses |
+| **Traffic** | Rate Limiting | Per-user request + token limits (e.g., 10 req/min, 5K tokens/min) |
+| **Traffic** | Path-based Routing | `/anthropic/*` → Claude, `/openai/*` → GPT, same gateway |
+| **Observability** | Dual Trace Export | Every LLM + MCP call traced to Langfuse AND ClickHouse |
+| **Identity** | Okta OAuth2 OBO | Tools execute with delegated user identity |
 
 ## Agent Capabilities
 
-The agent (`agent/agent.py`) implements a full agent loop:
+The agent (`agent/agent.py` v0.2.0) implements a full agentic loop:
 
 1. **Discovers MCP tools** from all endpoints (Slack, GitHub, Everything)
 2. **Calls LLM** via AgentGateway's OpenAI-compatible API
 3. **Executes tool calls** via MCP through AgentGateway
-4. **Iterates** until the LLM produces a final response
+4. **Iterates** (up to 5 rounds) until the LLM produces a final response
 
-### MCP Endpoints (consolidated on port 8090/30168)
+### Endpoints
 
-| Path | Backend | Tools |
-|---|---|---|
-| `/mcp` | Everything MCP server | echo, add, longRunningOperation, ... |
-| `/mcp/slack` | Slack MCP | post_message, list_channels, ... |
-| `/mcp-github` | GitHub Copilot MCP | issues, PRs, repos, ... |
-
-### LLM Endpoint
-
-| Path | Backend |
-|---|---|
-| `/anthropic/v1/chat/completions` | Claude (via Anthropic API) |
-| `/openai/v1/chat/completions` | GPT (via OpenAI API) |
-
-## Prerequisites
-
-- **AWS CLI** v2 with `agentcore-demo` profile configured
-- **Terraform** >= 1.5
-- **Docker** with buildx (for arm64 cross-compilation)
-- **Okta** developer account
-- **ngrok** (paid plan for multiple tunnels + static domains)
+| Type | Path | Backend |
+|------|------|---------|
+| LLM | `/anthropic/v1/chat/completions` | Claude via Anthropic |
+| LLM | `/openai/v1/chat/completions` | GPT via OpenAI |
+| MCP | `/mcp` | Everything MCP server |
+| MCP | `/mcp/slack` | Slack (post_message, list_channels, ...) |
+| MCP | `/mcp-github` | GitHub Copilot (issues, PRs, repos, ...) |
 
 ## Quick Start
 
@@ -89,31 +106,29 @@ cp terraform.tfvars.example terraform.tfvars
 # Set: okta_org_name, okta_api_token, agentgateway_endpoint
 ```
 
-### 2. Deploy Okta + AWS Infrastructure
+### 2. Deploy Infrastructure
 
 ```bash
 terraform init
-terraform apply
+terraform apply   # Creates Okta apps + AWS gateway/runtime/IAM/ECR
 ```
 
-### 3. Build & Push Agent (arm64)
+### 3. Build & Push Agent (arm64 required)
 
 ```bash
 cd agent
-# Login to ECR
 aws --profile agentcore-demo ecr get-login-password --region us-east-1 | \
-  docker login --username AWS --password-stdin 103739863673.dkr.ecr.us-east-1.amazonaws.com
+  docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
 
-# Build arm64 and push (AgentCore requires arm64)
 docker buildx build --platform linux/arm64 \
-  -t 103739863673.dkr.ecr.us-east-1.amazonaws.com/devops-copilot-agent:latest \
+  -t <account>.dkr.ecr.us-east-1.amazonaws.com/devops-copilot-agent:latest \
   --push .
 ```
 
 ### 4. Start ngrok Tunnels
 
 ```yaml
-# ~/.config/ngrok/ngrok.yml
+# ngrok.yml
 version: "3"
 tunnels:
   mcp:
@@ -133,61 +148,72 @@ ngrok start --all
 ### 5. Test
 
 ```bash
-# Check agent health
-curl https://mcp-agentgateway.ngrok.app/mcp  # Should return 406 (expected)
+# Invoke the agent via AgentCore
+RUNTIME_ARN="arn:aws:bedrock-agentcore:us-east-1:<account>:runtime/<runtime-id>"
+PAYLOAD=$(echo -n '{"input":"List available Slack channels"}' | base64 -w0)
 
-# Check LLM gateway
-curl https://llm-agentgateway.ngrok.app/anthropic/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"hi"}],"max_tokens":10}'
-
-# List discovered tools
-curl http://<agent-endpoint>/tools
-```
-
-## Project Structure
-
-```
-├── terraform/              # Infrastructure as Code
-│   ├── main.tf             # AWS provider + locals
-│   ├── versions.tf         # Provider versions (AWS, Okta, null)
-│   ├── variables.tf        # Input variables
-│   ├── outputs.tf          # Outputs
-│   ├── iam.tf              # IAM roles for AgentCore
-│   ├── agentcore.tf        # ECR + Runtime + Endpoint
-│   ├── gateway.tf          # AgentCore Gateway + MCP Target
-│   ├── okta.tf             # Okta apps, scopes, policies
-│   └── credentials.tf      # Okta OAuth2 credential provider
-├── agent/                  # Agent application
-│   ├── agent.py            # DevOps Copilot agent (LLM + MCP loop)
-│   ├── Dockerfile          # arm64-compatible container
-│   └── requirements.txt
-├── scripts/                # Deployment scripts
-└── docs/
-    └── architecture.md     # Detailed architecture
+aws bedrock-agentcore invoke-agent-runtime \
+  --agent-runtime-arn "$RUNTIME_ARN" \
+  --content-type "application/json" \
+  --payload "$PAYLOAD" \
+  response.json
 ```
 
 ## Auth Flow
 
 ```
-User → Okta (authorization_code) → JWT token
-  → AgentCore (validates JWT via CUSTOM_JWT authorizer)
+User → Okta (auth code + PKCE) → JWT with MCP scopes
+  → AgentCore Gateway (validates JWT via OIDC discovery)
     → Agent Runtime (processes request)
-      → AgentGateway LLM (via ngrok, OpenAI-compatible)
-      → AgentGateway MCP (via ngrok, Okta token validation)
-        → Slack/GitHub tools (with delegated identity)
+      → AgentGateway LLM (OpenAI-compatible, via ngrok)
+      → AgentGateway MCP (Slack/GitHub tools, via ngrok)
+        → Tools execute with delegated user identity
 ```
 
-## Key Decisions
+## Project Structure
 
-- **AgentCore requires arm64**: Use `docker buildx --platform linux/arm64` for cross-compilation
-- **Gateway authorizer is immutable**: Must set `CUSTOM_JWT` at creation time (can't update from `NONE`)
-- **Consolidated MCP gateway**: All MCP tools (Slack, GitHub, Everything) on one gateway/port for single ngrok tunnel
-- **`null_resource` + `local-exec`**: No Terraform provider for AgentCore yet — using AWS CLI
-- **Okta `refresh_token` not a valid grant type in policy rules**: Implied by `authorization_code`
-- **Okta policy rules need group assignment**: Added "Everyone" group for `authorization_code` grant
+```
+├── terraform/              # Okta + AWS infrastructure
+│   ├── okta.tf             # OAuth2 apps, scopes, policies
+│   ├── gateway.tf          # AgentCore Gateway + MCP target
+│   ├── agentcore.tf        # ECR + Runtime + Endpoint
+│   ├── iam.tf              # IAM roles
+│   ├── credentials.tf      # Okta credential provider (OBO)
+│   └── variables.tf        # Input variables
+├── agent/                  # Agent application
+│   ├── agent.py            # DevOps Copilot (LLM + MCP loop)
+│   ├── Dockerfile          # arm64-compatible container
+│   └── requirements.txt
+└── docs/
+    ├── architecture.md     # Detailed architecture + diagrams
+    └── blog-why-agent-gateway.md  # Why you need a gateway
+```
+
+## Key Gotchas
+
+| Gotcha | Detail |
+|--------|--------|
+| **arm64 only** | AgentCore requires arm64 images — use `docker buildx --platform linux/arm64` |
+| **Immutable authorizer** | Gateway authorizer type can't change after creation — set `CUSTOM_JWT` from the start |
+| **`/invocations` path** | AgentCore calls `/invocations` (SageMaker convention), not `/invoke` |
+| **No TF provider** | AgentCore has no Terraform provider yet — using `null_resource` + AWS CLI |
+| **ngrok interstitial** | Add `ngrok-skip-browser-warning` header for programmatic access |
+
+## Observability
+
+```
+Agent → AgentGateway → OTel Collector (fan-out)
+                           ├──► Langfuse — cost tracking, prompt logging, trace waterfalls
+                           └──► ClickHouse — gateway metrics, policy stats, route analytics
+```
+
+Both backends receive every LLM call and MCP tool invocation in real-time. See [architecture.md](docs/architecture.md) for details.
 
 ## Related
 
-- [k8s-rooster](https://github.com/ProfessorSeb/k8s-rooster) — Talos K8s cluster with ArgoCD, AgentGateway, kagent
-- [AgentGateway](https://github.com/agentgateway/agentgateway) — CNCF open-source agent gateway
+| Resource | Link |
+|----------|------|
+| AgentGateway (CNCF) | https://github.com/agentgateway/agentgateway |
+| k8s-rooster (backing cluster) | https://github.com/ProfessorSeb/k8s-rooster |
+| Why you need a gateway (blog) | [docs/blog-why-agent-gateway.md](docs/blog-why-agent-gateway.md) |
+| Architecture deep-dive | [docs/architecture.md](docs/architecture.md) |
