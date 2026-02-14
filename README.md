@@ -72,6 +72,9 @@ AgentGateway enforces these policies on every request:
 | **Security** | PII Protection | Detects/redacts PII before it reaches the LLM |
 | **Security** | Prompt Injection Guard | Blocks jailbreak and manipulation attempts |
 | **Security** | Credential Leak Protection | Prevents API keys/tokens from leaking in responses |
+| **Security** | MCP JWT Authentication | Validates Okta JWTs on MCP routes — unauthenticated requests rejected |
+| **Security** | Scope-Based MCP RBAC | `mcp:read` → list/search only, `mcp:write` → create/post, `mcp:admin` → full access |
+| **Security** | Destructive Op Blocking | `delete_repository`, `merge_pull_request` always denied regardless of scope |
 | **Traffic** | Rate Limiting | Per-user request + token limits (e.g., 10 req/min, 5K tokens/min) |
 | **Traffic** | Path-based Routing | `/anthropic/*` → Claude, `/openai/*` → GPT, same gateway |
 | **Observability** | Dual Trace Export | Every LLM + MCP call traced to Langfuse AND ClickHouse |
@@ -208,6 +211,57 @@ Agent → AgentGateway → OTel Collector (fan-out)
 ```
 
 Both backends receive every LLM call and MCP tool invocation in real-time. See [architecture.md](docs/architecture.md) for details.
+
+## MCP Tool Access Control
+
+AgentGateway enforces authentication and authorization at the MCP route level:
+
+```yaml
+# JWT Authentication — validates Okta tokens on every MCP request
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-jwt-auth-ent
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mcp-slack
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mcp-github
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+      - issuer: "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698"
+        audiences: ["api://default"]
+        jwks:
+          inline: '<Okta JWKS JSON>'
+```
+
+```yaml
+# Scope-Based RBAC — CEL expressions match JWT scopes to allowed tools
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: mcp-tool-rbac-read
+spec:
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+          - >-
+            claims.scp.exists(s, s == 'mcp:read') && (
+              tool.name.startsWith('list_') ||
+              tool.name.startsWith('get_') ||
+              tool.name.startsWith('search_')
+            )
+```
+
+See [auth-flow-deep-dive.md](docs/auth-flow-deep-dive.md) for the complete policy set.
 
 ## Related
 

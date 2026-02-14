@@ -254,13 +254,54 @@ resource "null_resource" "okta_credential_provider" {
 
 The service app exchanges the user's token for a new OBO token that carries the original user's identity + MCP scopes. When the agent posts a Slack message, it appears **as the user**. When it creates a GitHub issue, it's **attributed to the user**. The agent never has standing access to these tools.
 
-**Step 6 — AgentGateway enforces scope-based access on MCP routes:**
+**Step 6 — AgentGateway enforces three layers of MCP access control:**
+
+**Layer 1: JWT Authentication** — Enterprise policy validates Okta JWTs on every MCP request. No valid token = no tool access.
+
+```yaml
+traffic:
+  jwtAuthentication:
+    mode: Strict
+    providers:
+    - issuer: "https://your-okta.okta.com/oauth2/your-auth-server"
+      audiences: ["api://default"]
+      jwks:
+        inline: '<JWKS from Okta>'
+```
+
+**Layer 2: Scope-Based RBAC** — CEL expressions match JWT scopes to tool operations:
+
+```yaml
+backend:
+  mcp:
+    authorization:
+      action: Allow
+      policy:
+        matchExpressions:
+        - >-
+          claims.scp.exists(s, s == 'mcp:read') && (
+            tool.name.startsWith('list_') || tool.name.startsWith('get_')
+          )
+```
 
 | Scope | Allowed | Denied |
 |-------|---------|--------|
 | `mcp:read` | List channels, get issues, search code | Post messages, create issues |
 | `mcp:write` | All of read + post, create, comment | Delete, admin operations |
-| `mcp:admin` | All of write + delete, configure | — |
+| `mcp:admin` | All of write + admin operations | Destructive ops (always blocked) |
+
+Key detail: `tools/list` responses are **filtered** (unauthorized tools hidden from the agent), `tools/call` requests **rejected** if scopes don't match.
+
+**Layer 3: Destructive Operation Blocking** — always denied regardless of scope:
+
+```yaml
+authorization:
+  action: Deny
+  policy:
+    matchExpressions:
+    - >-
+      tool.name.contains('delete') || tool.name.contains('merge_pull_request')
+```
 
 Rate limiting applies per-user (the identified human, not the agent). Every tool call is traced with user identity.
 

@@ -363,17 +363,107 @@ resource "null_resource" "okta_credential_provider" {
 
 ### Step 6: AgentGateway MCP Policy Enforcement
 
-AgentGateway validates the OBO token on every MCP route and enforces **scope-based access control**:
+AgentGateway enforces **three layers of MCP access control**, all deployed as declarative YAML on k8s-rooster:
+
+#### Layer 1: JWT Authentication (Enterprise Policy)
+
+Every MCP request must carry a valid Okta JWT. Unauthenticated requests are rejected immediately.
+
+```yaml
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: mcp-jwt-auth-ent
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mcp-slack
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mcp-github
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+      - issuer: "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698"
+        audiences: ["api://default"]
+        jwks:
+          inline: '<Okta JWKS JSON>'  # Fetched from Okta JWKS endpoint
+```
+
+The gateway validates: JWT signature (RS256), issuer, audience (`api://default`), and expiration.
+
+#### Layer 2: Scope-Based Tool Authorization (CEL Expressions)
+
+Once authenticated, tool access is controlled by JWT scopes using CEL expressions:
+
+```yaml
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: mcp-tool-rbac-read
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mcp-slack
+  - group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mcp-github
+  backend:
+    mcp:
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+          - >-
+            claims.scp.exists(s, s == 'mcp:read') && (
+              tool.name.startsWith('list_') ||
+              tool.name.startsWith('get_') ||
+              tool.name.startsWith('search_') ||
+              tool.name == 'slack_list_channels' ||
+              tool.name == 'slack_get_channel_history'
+            )
+```
 
 | Scope | Allowed Operations | Denied Operations |
 |-------|--------------------|-------------------|
-| `mcp:read` | List Slack channels, get GitHub issues, read Jira boards | Post messages, create issues, modify boards |
-| `mcp:write` | All of `mcp:read` + post messages, create issues, comment | Delete channels, admin operations |
-| `mcp:admin` | All of `mcp:write` + delete, configure, admin operations | — |
+| `mcp:read` | List Slack channels, get GitHub issues, search code | Post messages, create issues |
+| `mcp:write` | All of `mcp:read` + post messages, create issues, reply | Delete channels, admin operations |
+| `mcp:admin` | All of `mcp:write` + admin operations | Destructive ops (always blocked) |
+
+**How it works at the MCP level:**
+- `tools/list` responses are **filtered** — unauthorized tools are hidden from the agent
+- `tools/call` requests are **rejected** if the user's scopes don't match
+
+#### Layer 3: Destructive Operation Blocking
+
+Certain operations are **always denied**, regardless of scope:
+
+```yaml
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: mcp-tool-block-destructive
+spec:
+  backend:
+    mcp:
+      authorization:
+        action: Deny
+        policy:
+          matchExpressions:
+          - >-
+            tool.name.contains('delete') ||
+            tool.name.contains('destroy') ||
+            tool.name.contains('merge_pull_request')
+```
+
+Even `mcp:admin` users cannot delete repositories or force-merge PRs through the agent. These operations require human approval outside the agent workflow.
 
 **Additional enforcement:**
-- **Rate limiting** — applied per-user (the identified human, not the agent), preventing abuse even if an agent is compromised
-- **Full tracing** — every tool call is logged with user identity, tool name, arguments, and result
+- **Rate limiting** — applied per-user (the identified human, not the agent)
+- **Full tracing** — every tool call logged with user identity, tool name, arguments, and result
 - **Dual export** — traces go to Langfuse (LLM analytics) and ClickHouse (gateway metrics)
 
 ---

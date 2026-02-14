@@ -216,6 +216,9 @@ Agent → AgentCore → User/App
 | MCP Everything | agentgateway-system | Demo MCP tools |
 | Langfuse OTel Collector | agentgateway-system | Trace fan-out to Langfuse + ClickHouse |
 | Security Policies | agentgateway-system | PII, prompt injection, credential protection |
+| MCP JWT Auth (Enterprise) | agentgateway-system | Okta JWT validation on MCP routes (inline JWKS) |
+| MCP Tool RBAC | agentgateway-system | Scope-based tool access (read/write/admin via CEL) |
+| MCP Destructive Block | agentgateway-system | Always-deny for delete/destroy operations |
 
 ## Key Technical Decisions
 
@@ -226,6 +229,8 @@ Agent → AgentCore → User/App
 | **Consolidated MCP gateway** | Single port (30168) for all MCP tools → single ngrok tunnel |
 | **`null_resource` + CLI** | No Terraform provider for AgentCore yet |
 | **ngrok for tunneling** | Connects AWS to on-prem k8s-rooster securely |
+| **Inline JWKS for MCP auth** | Static backends don't support TLS; Enterprise policy with inline JWKS works |
+| **CEL for MCP authorization** | `claims.scp.exists()` expressions match JWT scopes to tool operations |
 | **Agent loop pattern** | Discover tools → LLM → tool calls → LLM → response |
 | **Path-based LLM routing** | `/anthropic/v1/*` and `/openai/v1/*` on LLM gateway |
 
