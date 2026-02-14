@@ -76,8 +76,13 @@ async def call_llm(
 
     logger.info("Calling LLM gateway: %s (model=%s, msgs=%d)", url, LLM_MODEL, len(messages))
 
+    headers = {
+        "ngrok-skip-browser-warning": "true",
+        "User-Agent": "devops-copilot-agent/0.2.0",
+    }
+
     try:
-        resp = await http_client.post(url, json=payload)
+        resp = await http_client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         result = resp.json()
         logger.info("LLM response: tokens=%s", result.get("usage", {}))
@@ -107,7 +112,8 @@ async def discover_mcp_tools(path: str = "/mcp") -> list[dict]:
                 "clientInfo": {"name": "devops-copilot", "version": "0.2.0"},
                 "capabilities": {},
             }},
-            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+                     "ngrok-skip-browser-warning": "true", "User-Agent": "devops-copilot-agent/0.2.0"},
         )
         logger.info("MCP init response (%s): %d", path, resp.status_code)
 
@@ -115,7 +121,8 @@ async def discover_mcp_tools(path: str = "/mcp") -> list[dict]:
         resp = await http_client.post(
             url,
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+                     "ngrok-skip-browser-warning": "true", "User-Agent": "devops-copilot-agent/0.2.0"},
         )
         if resp.status_code == 200:
             data = resp.json()
@@ -139,7 +146,8 @@ async def call_mcp_tool(path: str, tool_name: str, arguments: dict) -> Any:
                 "name": tool_name,
                 "arguments": arguments,
             }},
-            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
+                     "ngrok-skip-browser-warning": "true", "User-Agent": "devops-copilot-agent/0.2.0"},
         )
         resp.raise_for_status()
         data = resp.json()
@@ -278,11 +286,11 @@ async def health():
 
 
 @app.post("/invoke")
+@app.post("/invocations")
 async def invoke(request: Request):
     """
     Main invocation endpoint for AgentCore runtime.
-    Receives agent invocation requests, runs the agent loop,
-    and returns the response.
+    AgentCore calls /invocations, but we also keep /invoke for direct testing.
     """
     body = await request.json()
     logger.info("Received invocation: %s", json.dumps(body, default=str)[:500])
@@ -340,6 +348,31 @@ async def root():
             "tools": "GET /tools",
         },
     }
+
+
+@app.post("/{path:path}")
+async def catch_all_post(path: str, request: Request):
+    """Catch-all POST handler to discover what AgentCore sends."""
+    body = await request.body()
+    headers = dict(request.headers)
+    logger.info("CATCH-ALL POST /%s | Headers: %s | Body: %s", path, json.dumps(headers)[:500], body.decode()[:500])
+
+    # Try to handle as an invoke request
+    try:
+        data = json.loads(body)
+        user_input = data.get("input", data.get("message", data.get("prompt", str(data))))
+        response_text = await agent_loop(user_input, "catch-all")
+        return JSONResponse(content={"output": response_text})
+    except Exception as e:
+        logger.error("Catch-all handler error: %s", e)
+        return JSONResponse(content={"output": f"Received at /{path}", "error": str(e)})
+
+
+@app.api_route("/{path:path}", methods=["GET", "PUT", "PATCH", "DELETE"])
+async def catch_all_other(path: str, request: Request):
+    """Catch-all for non-POST methods."""
+    logger.info("CATCH-ALL %s /%s", request.method, path)
+    return JSONResponse(content={"path": path, "method": request.method})
 
 
 @app.on_event("shutdown")
