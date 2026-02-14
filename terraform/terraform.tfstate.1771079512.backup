@@ -1,0 +1,845 @@
+{
+  "version": 4,
+  "terraform_version": "1.12.1",
+  "serial": 33,
+  "lineage": "e0b8c6f1-932d-5e8c-1129-2138bf5983f0",
+  "outputs": {
+    "agentcore_gateway_role_arn": {
+      "value": "arn:aws:iam::103739863673:role/devops-copilot-agentcore-gateway",
+      "type": "string"
+    },
+    "agentcore_runtime_role_arn": {
+      "value": "arn:aws:iam::103739863673:role/devops-copilot-agentcore-runtime",
+      "type": "string"
+    },
+    "ecr_repository_url": {
+      "value": "103739863673.dkr.ecr.us-east-1.amazonaws.com/devops-copilot-agent",
+      "type": "string"
+    },
+    "okta_client_id": {
+      "value": "0oa104zvj88F21SEe698",
+      "type": "string"
+    },
+    "okta_client_secret": {
+      "value": "WS7QOG1N7kwGmS9G-JSmL7lM68HkeT2Y9bBDlcaJFjRtSjK53SHUm92KURZgGxBa",
+      "type": "string",
+      "sensitive": true
+    },
+    "okta_issuer": {
+      "value": "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698",
+      "type": "string"
+    },
+    "okta_jwks_uri": {
+      "value": "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698/v1/keys",
+      "type": "string"
+    },
+    "okta_service_client_id": {
+      "value": "0oa104zvbj26VVleo698",
+      "type": "string"
+    },
+    "okta_service_client_secret": {
+      "value": "7NmjinRcQo9oOWMxTsqzmL6117ie_UWx8oG7e0lmr7GSf-DKZSV2x5EY1-olyydR",
+      "type": "string",
+      "sensitive": true
+    }
+  },
+  "resources": [
+    {
+      "mode": "data",
+      "type": "aws_caller_identity",
+      "name": "current",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "103739863673",
+            "arn": "arn:aws:sts::103739863673:assumed-role/AWSReservedSSO_AdministratorAccess_902fc4ea7fef3933/sebastian.maniak@solo.io",
+            "id": "103739863673",
+            "user_id": "AROARQJ3AWJ4R5VRHIYMG:sebastian.maniak@solo.io"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "mode": "data",
+      "type": "aws_region",
+      "name": "current",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "description": "US East (N. Virginia)",
+            "endpoint": "ec2.us-east-1.amazonaws.com",
+            "id": "us-east-1",
+            "name": "us-east-1"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "mode": "data",
+      "type": "okta_auth_server",
+      "name": "default",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "audiences": [
+              "api://default"
+            ],
+            "credentials_last_rotated": "2026-02-14 14:13:37 +0000 UTC",
+            "credentials_next_rotation": "2026-05-15 14:13:37 +0000 UTC",
+            "credentials_rotation_mode": "AUTO",
+            "description": "Default Authorization Server for your Applications",
+            "id": "aus104zseyg64swj3698",
+            "issuer": "https://integrator-7147223.okta.com/oauth2/default",
+            "issuer_mode": "ORG_URL",
+            "kid": "ZomLpMXYrmw9V0flcORv4cPRkWUIL2TO4-R83jhCMKQ",
+            "name": "default",
+            "status": "ACTIVE"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "mode": "data",
+      "type": "okta_group",
+      "name": "everyone",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "delay_read_seconds": null,
+            "description": "All users in your organization",
+            "id": "00g104zservbJPvz3698",
+            "include_users": false,
+            "name": "Everyone",
+            "type": "BUILT_IN",
+            "users": []
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_ecr_repository",
+      "name": "agent",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:ecr:us-east-1:103739863673:repository/devops-copilot-agent",
+            "encryption_configuration": [
+              {
+                "encryption_type": "AES256",
+                "kms_key": ""
+              }
+            ],
+            "force_delete": true,
+            "id": "devops-copilot-agent",
+            "image_scanning_configuration": [
+              {
+                "scan_on_push": true
+              }
+            ],
+            "image_tag_mutability": "MUTABLE",
+            "name": "devops-copilot-agent",
+            "registry_id": "103739863673",
+            "repository_url": "103739863673.dkr.ecr.us-east-1.amazonaws.com/devops-copilot-agent",
+            "tags": {
+              "Environment": "dev",
+              "ManagedBy": "terraform",
+              "Project": "agentcore-demo"
+            },
+            "tags_all": {
+              "Environment": "dev",
+              "ManagedBy": "terraform",
+              "Project": "agentcore-demo"
+            },
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiZGVsZXRlIjoxMjAwMDAwMDAwMDAwfX0="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "agentcore_gateway",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:iam::103739863673:role/devops-copilot-agentcore-gateway",
+            "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"103739863673\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"bedrock-agentcore.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
+            "create_date": "2026-02-14T14:29:29Z",
+            "description": "",
+            "force_detach_policies": false,
+            "id": "devops-copilot-agentcore-gateway",
+            "inline_policy": [
+              {
+                "name": "devops-copilot-agentcore-gateway",
+                "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"logs:CreateLogGroup\",\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:logs:us-east-1:103739863673:*\",\"Sid\":\"CloudWatchLogs\"},{\"Action\":[\"secretsmanager:GetSecretValue\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:secretsmanager:us-east-1:103739863673:secret:devops-copilot-*\",\"Sid\":\"SecretsAccess\"}]}"
+              }
+            ],
+            "managed_policy_arns": [],
+            "max_session_duration": 3600,
+            "name": "devops-copilot-agentcore-gateway",
+            "name_prefix": "",
+            "path": "/",
+            "permissions_boundary": "",
+            "tags": {
+              "Environment": "dev",
+              "ManagedBy": "terraform",
+              "Project": "agentcore-demo"
+            },
+            "tags_all": {
+              "Environment": "dev",
+              "ManagedBy": "terraform",
+              "Project": "agentcore-demo"
+            },
+            "unique_id": "AROARQJ3AWJ4UTH25255K"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "data.aws_caller_identity.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role",
+      "name": "agentcore_runtime",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "arn": "arn:aws:iam::103739863673:role/devops-copilot-agentcore-runtime",
+            "assume_role_policy": "{\"Statement\":[{\"Action\":\"sts:AssumeRole\",\"Condition\":{\"StringEquals\":{\"aws:SourceAccount\":\"103739863673\"}},\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"bedrock-agentcore.amazonaws.com\"}}],\"Version\":\"2012-10-17\"}",
+            "create_date": "2026-02-14T14:29:29Z",
+            "description": "",
+            "force_detach_policies": false,
+            "id": "devops-copilot-agentcore-runtime",
+            "inline_policy": [
+              {
+                "name": "devops-copilot-agentcore-runtime",
+                "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"ecr:GetDownloadUrlForLayer\",\"ecr:BatchGetImage\",\"ecr:BatchCheckLayerAvailability\",\"ecr:GetAuthorizationToken\"],\"Effect\":\"Allow\",\"Resource\":\"*\",\"Sid\":\"ECRPull\"},{\"Action\":[\"logs:CreateLogGroup\",\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:logs:us-east-1:103739863673:*\",\"Sid\":\"CloudWatchLogs\"},{\"Action\":[\"bedrock:InvokeModel\",\"bedrock:InvokeModelWithResponseStream\"],\"Effect\":\"Allow\",\"Resource\":\"*\",\"Sid\":\"BedrockInvoke\"}]}"
+              }
+            ],
+            "managed_policy_arns": [],
+            "max_session_duration": 3600,
+            "name": "devops-copilot-agentcore-runtime",
+            "name_prefix": "",
+            "path": "/",
+            "permissions_boundary": "",
+            "tags": {
+              "Environment": "dev",
+              "ManagedBy": "terraform",
+              "Project": "agentcore-demo"
+            },
+            "tags_all": {
+              "Environment": "dev",
+              "ManagedBy": "terraform",
+              "Project": "agentcore-demo"
+            },
+            "unique_id": "AROARQJ3AWJ4S5EK3F3R6"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "data.aws_caller_identity.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "agentcore_gateway",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "devops-copilot-agentcore-gateway:devops-copilot-agentcore-gateway",
+            "name": "devops-copilot-agentcore-gateway",
+            "name_prefix": "",
+            "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"logs:CreateLogGroup\",\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:logs:us-east-1:103739863673:*\",\"Sid\":\"CloudWatchLogs\"},{\"Action\":[\"secretsmanager:GetSecretValue\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:secretsmanager:us-east-1:103739863673:secret:devops-copilot-*\",\"Sid\":\"SecretsAccess\"}]}",
+            "role": "devops-copilot-agentcore-gateway"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_iam_role.agentcore_gateway",
+            "data.aws_caller_identity.current",
+            "data.aws_region.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "aws_iam_role_policy",
+      "name": "agentcore_runtime",
+      "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "devops-copilot-agentcore-runtime:devops-copilot-agentcore-runtime",
+            "name": "devops-copilot-agentcore-runtime",
+            "name_prefix": "",
+            "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Action\":[\"ecr:GetDownloadUrlForLayer\",\"ecr:BatchGetImage\",\"ecr:BatchCheckLayerAvailability\",\"ecr:GetAuthorizationToken\"],\"Effect\":\"Allow\",\"Resource\":\"*\",\"Sid\":\"ECRPull\"},{\"Action\":[\"logs:CreateLogGroup\",\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Effect\":\"Allow\",\"Resource\":\"arn:aws:logs:us-east-1:103739863673:*\",\"Sid\":\"CloudWatchLogs\"},{\"Action\":[\"bedrock:InvokeModel\",\"bedrock:InvokeModelWithResponseStream\"],\"Effect\":\"Allow\",\"Resource\":\"*\",\"Sid\":\"BedrockInvoke\"}]}",
+            "role": "devops-copilot-agentcore-runtime"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "aws_iam_role.agentcore_runtime",
+            "data.aws_caller_identity.current",
+            "data.aws_region.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "null_resource",
+      "name": "agent_runtime",
+      "provider": "provider[\"registry.terraform.io/hashicorp/null\"]",
+      "instances": [
+        {
+          "status": "tainted",
+          "schema_version": 0,
+          "attributes": {
+            "id": "7537115527056438825",
+            "triggers": {
+              "aws_profile": "agentcore-demo",
+              "aws_region": "us-east-1",
+              "image_uri": "103739863673.dkr.ecr.us-east-1.amazonaws.com/devops-copilot-agent:latest",
+              "name": "devops_copilot_runtime",
+              "role_arn": "arn:aws:iam::103739863673:role/devops-copilot-agentcore-runtime"
+            }
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "dependencies": [
+            "aws_ecr_repository.agent",
+            "aws_iam_role.agentcore_runtime",
+            "aws_iam_role_policy.agentcore_runtime",
+            "data.aws_caller_identity.current",
+            "data.aws_region.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "null_resource",
+      "name": "gateway",
+      "provider": "provider[\"registry.terraform.io/hashicorp/null\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "1955269744835990616",
+            "triggers": {
+              "aws_profile": "agentcore-demo",
+              "aws_region": "us-east-1",
+              "name": "devops-copilot-gateway",
+              "role_arn": "arn:aws:iam::103739863673:role/devops-copilot-agentcore-gateway"
+            }
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "dependencies": [
+            "aws_iam_role.agentcore_gateway",
+            "aws_iam_role_policy.agentcore_gateway",
+            "data.aws_caller_identity.current",
+            "data.aws_region.current"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "null_resource",
+      "name": "gateway_okta_authorizer",
+      "provider": "provider[\"registry.terraform.io/hashicorp/null\"]",
+      "instances": [
+        {
+          "status": "tainted",
+          "schema_version": 0,
+          "attributes": {
+            "id": "4068818735136692445",
+            "triggers": {
+              "aws_profile": "agentcore-demo",
+              "aws_region": "us-east-1",
+              "gateway_name": "devops-copilot-gateway",
+              "issuer": "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698",
+              "jwks_uri": "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698/v1/keys",
+              "role_arn": "arn:aws:iam::103739863673:role/devops-copilot-agentcore-gateway"
+            }
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "dependencies": [
+            "aws_iam_role.agentcore_gateway",
+            "aws_iam_role_policy.agentcore_gateway",
+            "data.aws_caller_identity.current",
+            "data.aws_region.current",
+            "data.okta_auth_server.default",
+            "null_resource.gateway",
+            "okta_app_oauth.agentcore_client"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "null_resource",
+      "name": "gateway_target_mcp",
+      "provider": "provider[\"registry.terraform.io/hashicorp/null\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "401225820913954985",
+            "triggers": {
+              "aws_profile": "agentcore-demo",
+              "aws_region": "us-east-1",
+              "gateway_endpoint": "https://your-agentgateway.ngrok-free.app",
+              "name": "agentgateway-mcp"
+            }
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "dependencies": [
+            "aws_iam_role.agentcore_gateway",
+            "aws_iam_role_policy.agentcore_gateway",
+            "data.aws_caller_identity.current",
+            "data.aws_region.current",
+            "null_resource.gateway"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "null_resource",
+      "name": "okta_credential_provider",
+      "provider": "provider[\"registry.terraform.io/hashicorp/null\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "id": "6497191296854121958",
+            "triggers": {
+              "aws_profile": "agentcore-demo",
+              "aws_region": "us-east-1",
+              "client_id": "0oa104zvbj26VVleo698",
+              "client_secret": "7NmjinRcQo9oOWMxTsqzmL6117ie_UWx8oG7e0lmr7GSf-DKZSV2x5EY1-olyydR",
+              "issuer": "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698",
+              "name": "devops-copilot-okta-obo"
+            }
+          },
+          "sensitive_attributes": [
+            [
+              {
+                "type": "get_attr",
+                "value": "triggers"
+              },
+              {
+                "type": "index",
+                "value": {
+                  "value": "client_secret",
+                  "type": "string"
+                }
+              }
+            ]
+          ],
+          "identity_schema_version": 0,
+          "dependencies": [
+            "aws_iam_role.agentcore_gateway",
+            "aws_iam_role_policy.agentcore_gateway",
+            "data.aws_caller_identity.current",
+            "data.aws_region.current",
+            "data.okta_auth_server.default",
+            "null_resource.gateway",
+            "okta_app_oauth.agentcore_service"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "okta_app_oauth",
+      "name": "agentcore_client",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "accessibility_error_redirect_url": "",
+            "accessibility_login_redirect_url": "",
+            "accessibility_self_service": false,
+            "admin_note": "",
+            "app_links_json": "{\"oidc_client_link\":true}",
+            "app_settings_json": "{}",
+            "authentication_policy": "rst104zsev40mADwo698",
+            "auto_key_rotation": true,
+            "auto_submit_toolbar": false,
+            "client_basic_secret": null,
+            "client_id": "0oa104zvj88F21SEe698",
+            "client_secret": "WS7QOG1N7kwGmS9G-JSmL7lM68HkeT2Y9bBDlcaJFjRtSjK53SHUm92KURZgGxBa",
+            "client_uri": "",
+            "consent_method": "TRUSTED",
+            "enduser_note": "",
+            "grant_types": [
+              "authorization_code",
+              "refresh_token"
+            ],
+            "groups_claim": [],
+            "hide_ios": true,
+            "hide_web": true,
+            "id": "0oa104zvj88F21SEe698",
+            "implicit_assignment": false,
+            "issuer_mode": "ORG_URL",
+            "jwks": [],
+            "jwks_uri": "",
+            "label": "devops-copilot-client",
+            "login_mode": "DISABLED",
+            "login_scopes": [],
+            "login_uri": "",
+            "logo": null,
+            "logo_uri": "",
+            "logo_url": "https://ok14static.oktacdn.com/assets/img/logos/default.6770228fb0dab49a1695ef440a5279bb.png",
+            "name": "oidc_client",
+            "omit_secret": false,
+            "pkce_required": false,
+            "policy_uri": "",
+            "post_logout_redirect_uris": [
+              "http://localhost:8080"
+            ],
+            "profile": "",
+            "redirect_uris": [
+              "http://localhost:8080/callback"
+            ],
+            "refresh_token_leeway": 0,
+            "refresh_token_rotation": "STATIC",
+            "response_types": [
+              "code"
+            ],
+            "sign_on_mode": "OPENID_CONNECT",
+            "status": "ACTIVE",
+            "timeouts": null,
+            "token_endpoint_auth_method": "client_secret_basic",
+            "tos_uri": "",
+            "type": "web",
+            "user_name_template": "${source.login}",
+            "user_name_template_push_status": "",
+            "user_name_template_suffix": "",
+            "user_name_template_type": "BUILT_IN",
+            "wildcard_redirect": "DISABLED"
+          },
+          "sensitive_attributes": [
+            [
+              {
+                "type": "get_attr",
+                "value": "client_basic_secret"
+              }
+            ],
+            [
+              {
+                "type": "get_attr",
+                "value": "client_secret"
+              }
+            ]
+          ],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozNjAwMDAwMDAwMDAwLCJyZWFkIjozNjAwMDAwMDAwMDAwLCJ1cGRhdGUiOjM2MDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "okta_app_oauth",
+      "name": "agentcore_service",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "accessibility_error_redirect_url": "",
+            "accessibility_login_redirect_url": "",
+            "accessibility_self_service": false,
+            "admin_note": "",
+            "app_links_json": "{\"oidc_client_link\":true}",
+            "app_settings_json": "{}",
+            "authentication_policy": "rst104zsev40mADwo698",
+            "auto_key_rotation": true,
+            "auto_submit_toolbar": false,
+            "client_basic_secret": null,
+            "client_id": "0oa104zvbj26VVleo698",
+            "client_secret": "7NmjinRcQo9oOWMxTsqzmL6117ie_UWx8oG7e0lmr7GSf-DKZSV2x5EY1-olyydR",
+            "client_uri": "",
+            "consent_method": "TRUSTED",
+            "enduser_note": "",
+            "grant_types": [
+              "client_credentials"
+            ],
+            "groups_claim": [],
+            "hide_ios": true,
+            "hide_web": true,
+            "id": "0oa104zvbj26VVleo698",
+            "implicit_assignment": false,
+            "issuer_mode": "ORG_URL",
+            "jwks": [],
+            "jwks_uri": "",
+            "label": "devops-copilot-service",
+            "login_mode": "DISABLED",
+            "login_scopes": [],
+            "login_uri": "",
+            "logo": null,
+            "logo_uri": "",
+            "logo_url": "https://ok14static.oktacdn.com/assets/img/logos/default.6770228fb0dab49a1695ef440a5279bb.png",
+            "name": "oidc_client",
+            "omit_secret": false,
+            "pkce_required": false,
+            "policy_uri": "",
+            "post_logout_redirect_uris": [],
+            "profile": "",
+            "redirect_uris": [],
+            "refresh_token_leeway": 0,
+            "refresh_token_rotation": "STATIC",
+            "response_types": [
+              "token"
+            ],
+            "sign_on_mode": "OPENID_CONNECT",
+            "status": "ACTIVE",
+            "timeouts": null,
+            "token_endpoint_auth_method": "client_secret_basic",
+            "tos_uri": "",
+            "type": "service",
+            "user_name_template": "${source.login}",
+            "user_name_template_push_status": "",
+            "user_name_template_suffix": "",
+            "user_name_template_type": "BUILT_IN",
+            "wildcard_redirect": "DISABLED"
+          },
+          "sensitive_attributes": [
+            [
+              {
+                "type": "get_attr",
+                "value": "client_basic_secret"
+              }
+            ],
+            [
+              {
+                "type": "get_attr",
+                "value": "client_secret"
+              }
+            ]
+          ],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozNjAwMDAwMDAwMDAwLCJyZWFkIjozNjAwMDAwMDAwMDAwLCJ1cGRhdGUiOjM2MDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "okta_auth_server_policy",
+      "name": "agentcore",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "auth_server_id": "aus104zseyg64swj3698",
+            "client_whitelist": [
+              "0oa104zvbj26VVleo698",
+              "0oa104zvj88F21SEe698"
+            ],
+            "description": "Token policy for AgentCore demo apps",
+            "id": "00p104zsvb3aG71Nu698",
+            "name": "AgentCore Policy",
+            "priority": 1,
+            "status": "ACTIVE"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "data.okta_auth_server.default",
+            "okta_app_oauth.agentcore_client",
+            "okta_app_oauth.agentcore_service"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "okta_auth_server_policy_rule",
+      "name": "agentcore_rule",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "access_token_lifetime_minutes": 60,
+            "auth_server_id": "aus104zseyg64swj3698",
+            "grant_type_whitelist": [
+              "authorization_code",
+              "client_credentials"
+            ],
+            "group_blacklist": [],
+            "group_whitelist": [
+              "00g104zservbJPvz3698"
+            ],
+            "id": "0pr104zuvjjU2bSHC698",
+            "inline_hook_id": "",
+            "name": "Allow MCP scopes",
+            "policy_id": "00p104zsvb3aG71Nu698",
+            "priority": 1,
+            "refresh_token_lifetime_minutes": 1440,
+            "refresh_token_window_minutes": 1440,
+            "scope_whitelist": [
+              "email",
+              "mcp:admin",
+              "mcp:read",
+              "mcp:write",
+              "openid",
+              "profile"
+            ],
+            "status": "ACTIVE",
+            "system": false,
+            "type": "RESOURCE_ACCESS",
+            "user_blacklist": [],
+            "user_whitelist": []
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "data.okta_auth_server.default",
+            "data.okta_group.everyone",
+            "okta_app_oauth.agentcore_client",
+            "okta_app_oauth.agentcore_service",
+            "okta_auth_server_policy.agentcore"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "okta_auth_server_scope",
+      "name": "mcp_admin",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "auth_server_id": "aus104zseyg64swj3698",
+            "consent": "REQUIRED",
+            "default": false,
+            "description": "Admin access to MCP tools (e.g. Slack post, GitHub write)",
+            "display_name": "",
+            "id": "scp104zu0ujkz5Y5n698",
+            "metadata_publish": "ALL_CLIENTS",
+            "name": "mcp:admin",
+            "optional": false,
+            "system": false
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "data.okta_auth_server.default"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "okta_auth_server_scope",
+      "name": "mcp_read",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "auth_server_id": "aus104zseyg64swj3698",
+            "consent": "IMPLICIT",
+            "default": false,
+            "description": "Read access to MCP tools via AgentGateway",
+            "display_name": "",
+            "id": "scp104ztcc09dyxHH698",
+            "metadata_publish": "ALL_CLIENTS",
+            "name": "mcp:read",
+            "optional": false,
+            "system": false
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "data.okta_auth_server.default"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "okta_auth_server_scope",
+      "name": "mcp_write",
+      "provider": "provider[\"registry.terraform.io/okta/okta\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "auth_server_id": "aus104zseyg64swj3698",
+            "consent": "IMPLICIT",
+            "default": false,
+            "description": "Write access to MCP tools via AgentGateway",
+            "display_name": "",
+            "id": "scp104zu2hlprTO5Q698",
+            "metadata_publish": "ALL_CLIENTS",
+            "name": "mcp:write",
+            "optional": false,
+            "system": false
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "data.okta_auth_server.default"
+          ]
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}

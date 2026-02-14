@@ -8,6 +8,7 @@ resource "null_resource" "gateway" {
     role_arn    = aws_iam_role.agentcore_gateway.arn
     aws_profile = var.aws_profile
     aws_region  = var.aws_region
+    okta_issuer = "https://${var.okta_org_name}.${var.okta_base_url}/oauth2/${data.okta_auth_server.default.id}"
   }
 
   provisioner "local-exec" {
@@ -31,8 +32,9 @@ resource "null_resource" "gateway" {
         --name "${self.triggers.name}" \
         --role-arn "${self.triggers.role_arn}" \
         --protocol-type "MCP" \
-        --authorizer-type "NONE" \
-        --description "Gateway to AgentGateway on k8s-rooster" \
+        --authorizer-type "CUSTOM_JWT" \
+        --authorizer-configuration "{\"customJWTAuthorizer\":{\"discoveryUrl\":\"${self.triggers.okta_issuer}/.well-known/openid-configuration\",\"allowedAudience\":[\"api://default\"]}}" \
+        --description "Gateway to AgentGateway on k8s-rooster (Okta JWT auth)" \
         --no-cli-pager --output json)
 
       echo "$RESULT" | jq -r '.gatewayId' > ${path.module}/gateway_id.txt

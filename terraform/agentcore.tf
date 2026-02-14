@@ -20,7 +20,7 @@ resource "aws_ecr_repository" "agent" {
 
 resource "null_resource" "agent_runtime" {
   triggers = {
-    name        = "${local.name_prefix}_runtime"
+    name        = "${local.name_prefix_safe}_runtime"
     role_arn    = aws_iam_role.agentcore_runtime.arn
     image_uri   = "${local.ecr_uri}:${var.agent_image_tag}"
     aws_profile = var.aws_profile
@@ -95,7 +95,7 @@ resource "null_resource" "agent_runtime" {
 
 resource "null_resource" "agent_runtime_endpoint" {
   triggers = {
-    name        = "${local.name_prefix}_endpoint"
+    name        = "${local.name_prefix_safe}_endpoint"
     aws_profile = var.aws_profile
     aws_region  = var.aws_region
   }

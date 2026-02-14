@@ -22,4 +22,6 @@ locals {
   region     = data.aws_region.current.name
   ecr_uri    = "${local.account_id}.dkr.ecr.${local.region}.amazonaws.com/${aws_ecr_repository.agent.name}"
   name_prefix = var.project_name
+  # AgentCore runtime names only allow [a-zA-Z][a-zA-Z0-9_] — no hyphens
+  name_prefix_safe = replace(var.project_name, "-", "_")
 }

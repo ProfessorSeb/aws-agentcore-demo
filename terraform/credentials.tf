@@ -43,43 +43,5 @@ resource "null_resource" "okta_credential_provider" {
   ]
 }
 
-###############################################################################
-# Update Gateway Authorizer — Switch from NONE to CUSTOM_JWT (Okta)
-###############################################################################
-
-resource "null_resource" "gateway_okta_authorizer" {
-  triggers = {
-    aws_profile = var.aws_profile
-    aws_region  = var.aws_region
-    jwks_uri    = "https://${var.okta_org_name}.${var.okta_base_url}/oauth2/${data.okta_auth_server.default.id}/v1/keys"
-    issuer      = "https://${var.okta_org_name}.${var.okta_base_url}/oauth2/${data.okta_auth_server.default.id}"
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      set -e
-      GATEWAY_ID=$(cat ${path.module}/gateway_id.txt)
-
-      # Update gateway authorizer to validate Okta JWTs
-      aws --profile ${self.triggers.aws_profile} --region ${self.triggers.aws_region} \
-        bedrock-agentcore-control update-gateway \
-        --gateway-identifier "$GATEWAY_ID" \
-        --authorizer-type "CUSTOM_JWT" \
-        --authorizer-configuration '{
-          "customJWTAuthorizer": {
-            "discoveryUrl": "${self.triggers.issuer}/.well-known/openid-configuration",
-            "allowedAudiences": ["api://default"],
-            "allowedClients": []
-          }
-        }' \
-        --no-cli-pager --output json
-
-      echo "Gateway authorizer updated to Okta CUSTOM_JWT"
-    EOT
-  }
-
-  depends_on = [
-    null_resource.gateway,
-    okta_app_oauth.agentcore_client,
-  ]
-}
+# NOTE: Gateway authorizer (CUSTOM_JWT with Okta) is set at creation time
+# in gateway.tf — AWS does not allow changing authorizer type after creation.
