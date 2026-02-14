@@ -231,15 +231,35 @@ Agent → AgentCore → User/App
 
 ## Tracing & Observability
 
-Every request through AgentGateway is traced:
+Every request through AgentGateway is traced via OpenTelemetry. A fan-out OTel Collector duplicates traces to two backends simultaneously:
 
 ```
-Agent → AgentGateway → OTel Collector → Langfuse (OTLP HTTP)
-                                       → ClickHouse (Solo UI)
+Agent → AgentGateway → OTel Collector (fan-out)
+                           ├──► Langfuse (OTLP HTTP) — LLM-native observability
+                           │      • Token usage, cost tracking
+                           │      • Prompt/completion logging
+                           │      • Trace waterfall with tool calls
+                           │      • Self-hosted at http://172.16.10.173:3000
+                           │
+                           └──► ClickHouse (Solo UI) — AgentGateway-native dashboards
+                                  • Gateway metrics and route analytics
+                                  • Policy evaluation results
+                                  • Rate limiting stats
 ```
 
-Trace fields include:
-- Gateway name, route, endpoint
-- Model, provider, tokens used
-- Request/response latency
-- Policy evaluation results (PII, prompt injection)
+### What Gets Captured
+
+| Signal | Source | Destination |
+|--------|--------|-------------|
+| LLM request/response spans | AgentGateway proxy | Langfuse + ClickHouse |
+| MCP tool call spans | AgentGateway MCP gateway | Langfuse + ClickHouse |
+| Policy evaluation (PII, injection) | AgentGateway policies | ClickHouse (Solo UI) |
+| Token usage & model info | AgentGateway proxy | Langfuse |
+| Gateway route/endpoint metadata | AgentGateway | Both |
+
+### Why Dual Export?
+
+- **Langfuse** gives LLM-focused observability: cost tracking, prompt analysis, trace waterfalls with tool call chains — ideal for debugging agent behavior
+- **ClickHouse (Solo UI)** gives infrastructure-focused observability: gateway metrics, policy enforcement stats, rate limiting — ideal for ops
+
+The fan-out collector is a separate OTel Collector deployment that avoids conflicts with AgentGateway's Helm-managed ConfigMap (managed by ArgoCD).
