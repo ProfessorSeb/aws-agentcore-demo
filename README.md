@@ -1,108 +1,193 @@
-# AWS Bedrock AgentCore Demo
+# AWS Bedrock AgentCore + AgentGateway + Okta Demo
 
-Deploy a **DevOps Copilot** agent on AWS Bedrock AgentCore, connected to AgentGateway on k8s-rooster for LLM and MCP tool access.
+Deploy a **DevOps Copilot** agent on AWS Bedrock AgentCore with:
+- **AgentGateway** for LLM proxy + MCP tool access (with tracing, rate limiting, security policies)
+- **Okta** for OAuth2 identity (on-behalf-of auth flow)
+- **ngrok** for secure tunneling to on-prem k8s-rooster cluster
 
 ## Architecture
 
 ```
-AgentCore Runtime (container) → AgentCore Gateway (MCP) → AgentGateway (k8s-rooster) → LLMs + Tools
+┌─────────────────────────────────────────┐
+│           AWS Bedrock AgentCore         │
+│  ┌─────────────────────────────────┐    │
+│  │     Agent Hosting Runtime       │    │
+│  │  ┌───────────────────────────┐  │    │
+│  │  │    DevOps Copilot Agent   │  │    │
+│  │  │         (Python)          │  │    │
+│  │  └──────┬──────────┬─────────┘  │    │
+│  └─────────┼──────────┼────────────┘    │
+│            │          │                 │
+│     mTLS + │    AUTH   │                │
+│     API key│ Mechanism │                │
+└────────────┼──────────┼────────────────┘
+             │          │
+     ┌───────▼──┐  ┌────▼──────────┐     ┌──────────┐
+     │agentgw   │  │  agentgw      │     │          │
+     │  LLM     │  │  MCP/Tools    │     │  OKTA    │
+     │(Anthropic│  │(Slack/GitHub) │◄────│  (JWT)   │
+     │ OpenAI)  │  │               │     │          │
+     └────┬─────┘  └──────┬────────┘     └──────────┘
+          │               │
+     ┌────▼─────┐   ┌─────▼──────┐
+     │  LLMs    │   │   Tools    │
+     │Claude,GPT│   │Slack,GitHub│
+     └──────────┘   └────────────┘
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the full diagram.
+## What's Deployed
+
+| Component | Details |
+|---|---|
+| **Okta** | 2 OAuth2 apps, 3 MCP scopes (`mcp:read`, `mcp:write`, `mcp:admin`), auth server policy |
+| **AWS Gateway** | AgentCore MCP gateway with Okta CUSTOM_JWT authorizer |
+| **Gateway Target** | Points to AgentGateway MCP endpoint via ngrok |
+| **Agent Runtime** | arm64 container on AgentCore (FastAPI + httpx) |
+| **IAM Roles** | Gateway role + Runtime role (Bedrock, ECR, CloudWatch, Secrets Manager) |
+| **ECR** | `devops-copilot-agent` repository |
+| **ngrok Tunnels** | `mcp-agentgateway.ngrok.app` (MCP) + `llm-agentgateway.ngrok.app` (LLM) |
+
+## Agent Capabilities
+
+The agent (`agent/agent.py`) implements a full agent loop:
+
+1. **Discovers MCP tools** from all endpoints (Slack, GitHub, Everything)
+2. **Calls LLM** via AgentGateway's OpenAI-compatible API
+3. **Executes tool calls** via MCP through AgentGateway
+4. **Iterates** until the LLM produces a final response
+
+### MCP Endpoints (consolidated on port 8090/30168)
+
+| Path | Backend | Tools |
+|---|---|---|
+| `/mcp` | Everything MCP server | echo, add, longRunningOperation, ... |
+| `/mcp/slack` | Slack MCP | post_message, list_channels, ... |
+| `/mcp-github` | GitHub Copilot MCP | issues, PRs, repos, ... |
+
+### LLM Endpoint
+
+| Path | Backend |
+|---|---|
+| `/anthropic/v1/chat/completions` | Claude (via Anthropic API) |
+| `/openai/v1/chat/completions` | GPT (via OpenAI API) |
 
 ## Prerequisites
 
 - **AWS CLI** v2 with `agentcore-demo` profile configured
 - **Terraform** >= 1.5
-- **Docker** (for building the agent container)
-- **jq** (for script output parsing)
+- **Docker** with buildx (for arm64 cross-compilation)
+- **Okta** developer account
+- **ngrok** (paid plan for multiple tunnels + static domains)
 
 ## Quick Start
 
-### 1. Configure Variables
+### 1. Configure
 
 ```bash
 cd terraform
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars — set agentgateway_endpoint to your public URL
+# Set: okta_org_name, okta_api_token, agentgateway_endpoint
 ```
 
-### 2. Deploy Everything
+### 2. Deploy Okta + AWS Infrastructure
 
 ```bash
-./scripts/deploy.sh
+terraform init
+terraform apply
 ```
 
-This will:
-1. Create IAM roles and ECR repository (Terraform)
-2. Build and push the agent container to ECR
-3. Create AgentCore runtime, endpoint, gateway, and targets (Terraform via AWS CLI)
-
-### 3. Test
+### 3. Build & Push Agent (arm64)
 
 ```bash
-./scripts/test.sh
+cd agent
+# Login to ECR
+aws --profile agentcore-demo ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin 103739863673.dkr.ecr.us-east-1.amazonaws.com
+
+# Build arm64 and push (AgentCore requires arm64)
+docker buildx build --platform linux/arm64 \
+  -t 103739863673.dkr.ecr.us-east-1.amazonaws.com/devops-copilot-agent:latest \
+  --push .
 ```
 
-### 4. Destroy
+### 4. Start ngrok Tunnels
+
+```yaml
+# ~/.config/ngrok/ngrok.yml
+version: "3"
+tunnels:
+  mcp:
+    addr: 172.16.10.168:30168
+    proto: http
+    url: mcp-agentgateway.ngrok.app
+  llm:
+    addr: 172.16.10.168:31572
+    proto: http
+    url: llm-agentgateway.ngrok.app
+```
 
 ```bash
-./scripts/destroy.sh
+ngrok start --all
+```
+
+### 5. Test
+
+```bash
+# Check agent health
+curl https://mcp-agentgateway.ngrok.app/mcp  # Should return 406 (expected)
+
+# Check LLM gateway
+curl https://llm-agentgateway.ngrok.app/anthropic/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-sonnet-4-20250514","messages":[{"role":"user","content":"hi"}],"max_tokens":10}'
+
+# List discovered tools
+curl http://<agent-endpoint>/tools
 ```
 
 ## Project Structure
 
 ```
-├── terraform/          # Infrastructure as Code
-│   ├── main.tf         # Provider config
-│   ├── iam.tf          # IAM roles for AgentCore
-│   ├── agentcore.tf    # ECR + Runtime + Endpoint (local-exec)
-│   ├── gateway.tf      # Gateway + Targets (local-exec)
-│   ├── credentials.tf  # OAuth2/API key placeholders
-│   ├── variables.tf    # Input variables
-│   ├── outputs.tf      # Outputs
-│   └── versions.tf     # Provider versions
-├── agent/              # Agent application
-│   ├── agent.py        # DevOps Copilot agent (FastAPI)
-│   ├── Dockerfile      # Container image
+├── terraform/              # Infrastructure as Code
+│   ├── main.tf             # AWS provider + locals
+│   ├── versions.tf         # Provider versions (AWS, Okta, null)
+│   ├── variables.tf        # Input variables
+│   ├── outputs.tf          # Outputs
+│   ├── iam.tf              # IAM roles for AgentCore
+│   ├── agentcore.tf        # ECR + Runtime + Endpoint
+│   ├── gateway.tf          # AgentCore Gateway + MCP Target
+│   ├── okta.tf             # Okta apps, scopes, policies
+│   └── credentials.tf      # Okta OAuth2 credential provider
+├── agent/                  # Agent application
+│   ├── agent.py            # DevOps Copilot agent (LLM + MCP loop)
+│   ├── Dockerfile          # arm64-compatible container
 │   └── requirements.txt
-├── scripts/            # Deployment scripts
-│   ├── deploy.sh       # Full deploy
-│   ├── destroy.sh      # Tear down
-│   └── test.sh         # Status check
+├── scripts/                # Deployment scripts
 └── docs/
-    └── architecture.md # Architecture diagram
+    └── architecture.md     # Detailed architecture
 ```
 
-## Why `null_resource` + `local-exec`?
+## Auth Flow
 
-AWS Bedrock AgentCore is brand new — no Terraform provider resources exist yet. We use `null_resource` with `local-exec` provisioners calling the AWS CLI (`bedrock-agentcore-control` subcommand). This is structured cleanly so resources can be migrated to native Terraform resources when a provider is available.
-
-## AgentGateway Connection
-
-The AgentCore Gateway points to your AgentGateway instance on k8s-rooster. Since k8s-rooster is on a private network (172.16.10.168), you need a public endpoint:
-
-- **Option 1**: ngrok tunnel to the AgentGateway service
-- **Option 2**: Cloudflare tunnel
-- **Option 3**: Public load balancer
-
-Set the public URL in `terraform.tfvars` → `agentgateway_endpoint`.
-
-## Future: Okta OBO Integration
-
-The `credentials.tf` file has a placeholder for OAuth2 credential provider integration with Okta. When ready:
-
-1. Configure Okta OIDC application
-2. Create OAuth2 credential provider in AgentCore
-3. Attach credential provider to gateway targets
-4. Enable on-behalf-of (OBO) token flow
-
-## AWS Profile
-
-All commands use `--profile agentcore-demo`. Set this up:
-
-```bash
-aws configure --profile agentcore-demo
-# Region: us-east-1
-# Account: 103739863673
 ```
+User → Okta (authorization_code) → JWT token
+  → AgentCore (validates JWT via CUSTOM_JWT authorizer)
+    → Agent Runtime (processes request)
+      → AgentGateway LLM (via ngrok, OpenAI-compatible)
+      → AgentGateway MCP (via ngrok, Okta token validation)
+        → Slack/GitHub tools (with delegated identity)
+```
+
+## Key Decisions
+
+- **AgentCore requires arm64**: Use `docker buildx --platform linux/arm64` for cross-compilation
+- **Gateway authorizer is immutable**: Must set `CUSTOM_JWT` at creation time (can't update from `NONE`)
+- **Consolidated MCP gateway**: All MCP tools (Slack, GitHub, Everything) on one gateway/port for single ngrok tunnel
+- **`null_resource` + `local-exec`**: No Terraform provider for AgentCore yet — using AWS CLI
+- **Okta `refresh_token` not a valid grant type in policy rules**: Implied by `authorization_code`
+- **Okta policy rules need group assignment**: Added "Everyone" group for `authorization_code` grant
+
+## Related
+
+- [k8s-rooster](https://github.com/ProfessorSeb/k8s-rooster) — Talos K8s cluster with ArgoCD, AgentGateway, kagent
+- [AgentGateway](https://github.com/agentgateway/agentgateway) — CNCF open-source agent gateway
