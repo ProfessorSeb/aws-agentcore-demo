@@ -10,5 +10,9 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.0"
     }
+    okta = {
+      source  = "okta/okta"
+      version = "~> 4.0"
+    }
   }
 }

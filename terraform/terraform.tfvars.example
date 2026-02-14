@@ -7,8 +7,14 @@ agent_image_tag = "latest"
 # Set this to your public AgentGateway endpoint (e.g. ngrok URL)
 agentgateway_endpoint = "https://your-agentgateway.ngrok-free.app"
 
-# Okta OIDC discovery URL (for future OAuth2 integration)
-okta_discovery_url = "https://your-org.okta.com/.well-known/openid-configuration"
+# Okta — get these from your Okta developer portal
+okta_org_name  = "dev-12345678"        # Your Okta org (from URL)
+okta_base_url  = "okta.com"            # or "oktapreview.com"
+okta_api_token = "your-api-token-here" # Security → API → Tokens
+
+# OAuth2 redirect URIs (adjust for your demo app)
+agent_redirect_uri    = "http://localhost:8080/callback"
+agent_post_logout_uri = "http://localhost:8080"
 
 tags = {
   Project     = "agentcore-demo"

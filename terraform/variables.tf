@@ -32,10 +32,33 @@ variable "agentgateway_endpoint" {
   default     = "https://agentgateway.example.com"
 }
 
-variable "okta_discovery_url" {
-  description = "Okta OIDC discovery URL (for future OAuth2 integration)"
+variable "okta_org_name" {
+  description = "Okta org name (e.g. dev-12345678)"
   type        = string
-  default     = "https://your-org.okta.com/.well-known/openid-configuration"
+}
+
+variable "okta_base_url" {
+  description = "Okta base URL"
+  type        = string
+  default     = "okta.com"
+}
+
+variable "okta_api_token" {
+  description = "Okta API token for provisioning"
+  type        = string
+  sensitive   = true
+}
+
+variable "agent_redirect_uri" {
+  description = "OAuth2 redirect URI for the user-facing app"
+  type        = string
+  default     = "http://localhost:8080/callback"
+}
+
+variable "agent_post_logout_uri" {
+  description = "Post-logout redirect URI"
+  type        = string
+  default     = "http://localhost:8080"
 }
 
 variable "tags" {
