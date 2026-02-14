@@ -60,9 +60,6 @@ resource "okta_app_oauth" "agentcore_client" {
   token_endpoint_auth_method = "client_secret_basic"
   response_types             = ["code"]
 
-  lifecycle {
-    ignore_changes = [groups]
-  }
 }
 
 ###############################################################################
@@ -76,10 +73,6 @@ resource "okta_app_oauth" "agentcore_service" {
   grant_types                = ["client_credentials"]
   token_endpoint_auth_method = "client_secret_basic"
   response_types             = ["token"]
-
-  lifecycle {
-    ignore_changes = [groups]
-  }
 }
 
 ###############################################################################
@@ -97,16 +90,22 @@ resource "okta_auth_server_policy" "agentcore" {
   ]
 }
 
+data "okta_group" "everyone" {
+  name = "Everyone"
+}
+
 resource "okta_auth_server_policy_rule" "agentcore_rule" {
   auth_server_id                = data.okta_auth_server.default.id
   policy_id                     = okta_auth_server_policy.agentcore.id
   name                          = "Allow MCP scopes"
   priority                      = 1
-  grant_type_whitelist          = ["authorization_code", "refresh_token", "client_credentials"]
+  grant_type_whitelist          = ["authorization_code", "client_credentials"]
   scope_whitelist               = ["openid", "profile", "email", "mcp:read", "mcp:write", "mcp:admin"]
-  access_token_lifetime_minutes = 60
-  refresh_token_lifetime_minutes = 1440
-  inline_hook_id                = ""
+  group_whitelist               = [data.okta_group.everyone.id]
+  access_token_lifetime_minutes   = 60
+  refresh_token_lifetime_minutes  = 1440
+  refresh_token_window_minutes    = 1440
+  inline_hook_id                  = ""
 }
 
 ###############################################################################
