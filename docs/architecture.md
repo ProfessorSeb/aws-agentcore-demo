@@ -107,6 +107,48 @@ The agent doesn't call LLMs or tools directly. Everything flows through AgentGat
                           └────────────────────────────────────────────────┘
 ```
 
+## Why Two Gateways?
+
+A common question: **why does this architecture have both an AgentCore Gateway AND Agentgateway?** They serve fundamentally different roles.
+
+### AgentCore Gateway (AWS-Managed)
+
+The AgentCore Gateway is AWS's **MCP protocol bridge**. It's a managed AWS service that:
+
+- **Authenticates callers** at the AWS edge using Okta CUSTOM_JWT authorization
+- **Routes MCP protocol traffic** between the AgentCore runtime and your MCP server targets
+- **Manages the connection lifecycle** — the agent discovers MCP servers through this gateway
+
+Think of it as the **front door**: it answers "is this agent allowed to connect to tools at all?" It's required when running on AgentCore because AWS needs a managed control point for the MCP protocol handshake.
+
+### Agentgateway (Self-Hosted, on Kubernetes)
+
+Agentgateway is the **policy and governance engine**. It runs on your infrastructure and provides:
+
+- **Security policies** — PII protection, prompt injection guards, credential leak detection
+- **Multi-provider LLM routing** — `/anthropic/*` → Claude, `/openai/*` → GPT through one gateway
+- **MCP tool aggregation** — fans out to Slack, GitHub, and other MCP servers behind a single endpoint
+- **Rate limiting** — per-user request and token limits
+- **Full observability** — every LLM call and tool invocation traced to Langfuse + ClickHouse
+- **Fine-grained authorization** — CEL-based RBAC using JWT scopes (`mcp:read`, `mcp:write`, `mcp:admin`)
+
+Think of it as the **policy engine**: it answers "what is this agent allowed to DO, and how do we track it?"
+
+### Do You Need Both?
+
+**If you're running on AWS AgentCore**: Yes. The AgentCore Gateway is required for AgentCore's managed MCP routing. Agentgateway sits behind it and provides the governance layer that AgentCore doesn't offer natively.
+
+**If you're self-hosting agents** (not on AgentCore): You only need Agentgateway. Your agents connect directly to it, and it handles authentication, authorization, routing, and observability in one place. No AgentCore Gateway needed.
+
+The architecture looks like:
+
+```
+With AgentCore:     Agent → AgentCore Gateway (identity) → ngrok → Agentgateway (policy) → LLMs/Tools
+Without AgentCore:  Agent → Agentgateway (identity + policy) → LLMs/Tools
+```
+
+AgentCore Gateway is the AWS tax for managed agent hosting. Agentgateway is where the actual governance happens regardless of where your agents run.
+
 ## Request Flow
 
 ### 1. User Invokes Agent
