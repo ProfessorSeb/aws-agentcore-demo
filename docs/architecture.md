@@ -158,7 +158,7 @@ Two layers of access control:
 |-----------|-------------|
 | AgentGateway Proxy | LLM gateway (port 8080/31572) |
 | MCP Gateway Proxy | MCP gateway (port 8090/30168) |
-| GitHub MCP Backend | GitHub Copilot MCP (api.githubcopilot.com) + PAT auth |
+| Everything MCP Backend (header auth: X-AgentGateway-Auth) | GitHub Copilot MCP (api.githubcopilot.com) + PAT auth |
 | Enterprise JWT Policy | Okta JWT validation on GitHub MCP route |
 | RBAC Policies | Scope-based tool access (read/write/admin via CEL) |
 | Destructive Block | Always-deny for delete/destroy operations |
