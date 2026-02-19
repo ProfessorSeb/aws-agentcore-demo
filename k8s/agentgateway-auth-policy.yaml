@@ -1,0 +1,72 @@
+###############################################################################
+# EnterpriseAgentgatewayPolicy — Okta JWT Authentication for MCP Routes
+#
+# This policy makes AgentGateway the single authentication + authorization
+# layer for all MCP tool calls. No AWS-specific gateway needed.
+#
+# Auth chain:
+#   Agent → (Okta JWT via client_credentials) → AgentGateway → MCP servers
+#
+# AgentGateway validates the JWT, checks scopes, and enforces RBAC:
+#   mcp:read  → list/get/search tools only
+#   mcp:write → read + create/post/send tools
+#   mcp:admin → full access (except destructive ops, always denied)
+###############################################################################
+apiVersion: enterpriseagentgateway.solo.io/v1alpha1
+kind: EnterpriseAgentgatewayPolicy
+metadata:
+  name: okta-mcp-auth
+  namespace: agentgateway
+spec:
+  targetRefs:
+  - group: agentgateway.dev
+    kind: GatewayParameters
+    name: agentgateway
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+      - issuer: "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698"
+        audiences: ["api://default"]
+        jwks:
+          remote:
+            url: "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698/v1/keys"
+            cacheDuration: 3600s
+  backend:
+    mcp:
+      # Layer 1: Scope-based RBAC — match JWT scopes to tool operations
+      authorization:
+        action: Allow
+        policy:
+          matchExpressions:
+          # mcp:read → read-only tools
+          - >-
+            claims.scp.exists(s, s == 'mcp:read') && (
+              tool.name.startsWith('list_') ||
+              tool.name.startsWith('get_') ||
+              tool.name.startsWith('search_') ||
+              tool.name.startsWith('read_')
+            )
+          # mcp:write → read + write tools
+          - >-
+            claims.scp.exists(s, s == 'mcp:write') && (
+              tool.name.startsWith('list_') ||
+              tool.name.startsWith('get_') ||
+              tool.name.startsWith('search_') ||
+              tool.name.startsWith('read_') ||
+              tool.name.startsWith('post_') ||
+              tool.name.startsWith('create_') ||
+              tool.name.startsWith('send_') ||
+              tool.name.startsWith('update_') ||
+              tool.name.startsWith('comment_')
+            )
+          # mcp:admin → all tools (except deny list below)
+          - >-
+            claims.scp.exists(s, s == 'mcp:admin')
+      # Layer 2: Destructive operations — always denied regardless of scope
+      denyPolicy:
+        matchExpressions:
+        - >-
+          tool.name.contains('delete') ||
+          tool.name.contains('merge_pull_request') ||
+          tool.name.contains('destroy')

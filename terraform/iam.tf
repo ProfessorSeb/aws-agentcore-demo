@@ -1,5 +1,6 @@
 ###############################################################################
 # IAM — Roles & Policies for AgentCore
+# Note: Gateway role removed — auth handled by AgentGateway on k8s-rooster
 ###############################################################################
 
 # --- Agent Runtime Role ---
@@ -63,60 +64,6 @@ resource "aws_iam_role_policy" "agentcore_runtime" {
           "bedrock:InvokeModelWithResponseStream",
         ]
         Resource = "*"
-      },
-    ]
-  })
-}
-
-# --- Gateway Role ---
-resource "aws_iam_role" "agentcore_gateway" {
-  name = "${local.name_prefix}-agentcore-gateway"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "bedrock-agentcore.amazonaws.com"
-        }
-        Action = "sts:AssumeRole"
-        Condition = {
-          StringEquals = {
-            "aws:SourceAccount" = local.account_id
-          }
-        }
-      }
-    ]
-  })
-
-  tags = var.tags
-}
-
-resource "aws_iam_role_policy" "agentcore_gateway" {
-  name = "${local.name_prefix}-agentcore-gateway"
-  role = aws_iam_role.agentcore_gateway.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "CloudWatchLogs"
-        Effect = "Allow"
-        Action = [
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-        ]
-        Resource = "arn:aws:logs:${local.region}:${local.account_id}:*"
-      },
-      {
-        Sid    = "SecretsAccess"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue",
-        ]
-        Resource = "arn:aws:secretsmanager:${local.region}:${local.account_id}:secret:${local.name_prefix}-*"
       },
     ]
   })

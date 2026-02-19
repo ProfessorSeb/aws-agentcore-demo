@@ -5,17 +5,24 @@ Architecture:
   AgentCore Runtime → This Agent → AgentGateway (LLM + MCP)
                                        ↓              ↓
                                    Anthropic      Slack/GitHub/MCP
-                                       ↑              ↑
-                                     Okta JWT auth on both paths
+                                                       ↑
+                                                  Okta JWT auth
+                                                  (client_credentials)
 
 The agent uses AgentGateway as both:
 1. LLM proxy (OpenAI-compatible) → /anthropic/v1/chat/completions
 2. MCP tool gateway → /mcp/slack, /mcp-github, /mcp
+
+Auth model:
+- LLM calls: No auth needed — AgentGateway holds provider API keys
+- MCP calls: Okta JWT (client_credentials) — AgentGateway validates via
+  EnterpriseAgentgatewayPolicy with scope-based RBAC
 """
 
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,7 +33,7 @@ from fastapi.responses import JSONResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="DevOps Copilot Agent", version="0.2.0")
+app = FastAPI(title="DevOps Copilot Agent", version="0.3.0")
 
 # --- Configuration via environment ---
 AGENT_NAME = os.getenv("AGENT_NAME", "DevOps Copilot")
@@ -38,6 +45,12 @@ MCP_GATEWAY_URL = os.getenv("MCP_GATEWAY_URL", "https://mcp-agentgateway.ngrok.a
 # LLM config
 LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1024"))
+
+# Okta config — agent authenticates to AgentGateway MCP via client_credentials
+OKTA_TOKEN_URL = os.getenv("OKTA_TOKEN_URL", "")
+OKTA_CLIENT_ID = os.getenv("OKTA_CLIENT_ID", "")
+OKTA_CLIENT_SECRET = os.getenv("OKTA_CLIENT_SECRET", "")
+OKTA_SCOPES = os.getenv("OKTA_SCOPES", "mcp:read mcp:write")
 
 # System prompt
 SYSTEM_PROMPT = """You are a DevOps Copilot agent. You help with infrastructure management,
@@ -56,6 +69,56 @@ http_client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
 
 
 # =============================================================================
+# Okta Token Management
+# =============================================================================
+
+_token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0}
+
+
+async def get_okta_token() -> str:
+    """Get a valid Okta access token, refreshing if expired.
+
+    Uses client_credentials grant — the agent authenticates as a service
+    account. AgentGateway validates the JWT and enforces scope-based RBAC
+    on MCP tool calls.
+    """
+    # Return cached token if still valid (with 5-min buffer)
+    if _token_cache["access_token"] and time.time() < _token_cache["expires_at"] - 300:
+        return _token_cache["access_token"]
+
+    if not OKTA_TOKEN_URL or not OKTA_CLIENT_ID or not OKTA_CLIENT_SECRET:
+        logger.warning("Okta credentials not configured — MCP calls will be unauthenticated")
+        return ""
+
+    logger.info("Refreshing Okta access token via client_credentials grant")
+
+    try:
+        resp = await http_client.post(
+            OKTA_TOKEN_URL,
+            data={
+                "grant_type": "client_credentials",
+                "scope": OKTA_SCOPES,
+            },
+            auth=(OKTA_CLIENT_ID, OKTA_CLIENT_SECRET),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        access_token = data["access_token"]
+        expires_in = data.get("expires_in", 3600)
+        _token_cache["access_token"] = access_token
+        _token_cache["expires_at"] = time.time() + expires_in
+
+        logger.info("Okta token refreshed (expires in %ds)", expires_in)
+        return access_token
+
+    except Exception as e:
+        logger.error("Failed to get Okta token: %s", e)
+        return ""
+
+
+# =============================================================================
 # LLM Gateway Integration
 # =============================================================================
 
@@ -63,7 +126,10 @@ async def call_llm(
     messages: list[dict],
     tools: list[dict] | None = None,
 ) -> dict:
-    """Call LLM via AgentGateway's OpenAI-compatible endpoint."""
+    """Call LLM via AgentGateway's OpenAI-compatible endpoint.
+
+    No auth needed — AgentGateway holds provider API keys and injects them.
+    """
     url = f"{LLM_GATEWAY_URL}/anthropic/v1/chat/completions"
 
     payload: dict[str, Any] = {
@@ -78,7 +144,7 @@ async def call_llm(
 
     headers = {
         "ngrok-skip-browser-warning": "true",
-        "User-Agent": "devops-copilot-agent/0.2.0",
+        "User-Agent": "devops-copilot-agent/0.3.0",
     }
 
     try:
@@ -99,33 +165,72 @@ async def call_llm(
 # MCP Tool Integration
 # =============================================================================
 
+async def _mcp_headers() -> dict[str, str]:
+    """Build headers for MCP requests, including Okta JWT if configured."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "ngrok-skip-browser-warning": "true",
+        "User-Agent": "devops-copilot-agent/0.3.0",
+    }
+    token = await get_okta_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+# Session IDs per MCP endpoint — required for stateful MCP after initialize
+MCP_SESSION_IDS: dict[str, str] = {}
+
+
 async def discover_mcp_tools(path: str = "/mcp") -> list[dict]:
     """Discover available tools from an MCP endpoint via AgentGateway."""
     url = f"{MCP_GATEWAY_URL}{path}"
+    headers = await _mcp_headers()
 
     try:
-        # MCP tool discovery — POST with initialize/tools_list
+        # MCP tool discovery — POST with initialize, capture session ID
         resp = await http_client.post(
             url,
             json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                 "protocolVersion": "2025-03-26",
-                "clientInfo": {"name": "devops-copilot", "version": "0.2.0"},
+                "clientInfo": {"name": "devops-copilot", "version": "0.3.0"},
                 "capabilities": {},
             }},
-            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
-                     "ngrok-skip-browser-warning": "true", "User-Agent": "devops-copilot-agent/0.2.0"},
+            headers=headers,
         )
         logger.info("MCP init response (%s): %d", path, resp.status_code)
 
-        # List tools
+        # Capture session ID from response header
+        session_id = resp.headers.get("mcp-session-id", "")
+        if session_id:
+            MCP_SESSION_IDS[path] = session_id
+            logger.info("MCP session ID for %s: %s", path, session_id[:20])
+
+        # Parse SSE response to get the JSON data
+        init_data = _parse_sse_or_json(resp)
+
+        # Send initialized notification (required by MCP protocol)
+        notify_headers = {**headers}
+        if session_id:
+            notify_headers["Mcp-Session-Id"] = session_id
+        await http_client.post(
+            url,
+            json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+            headers=notify_headers,
+        )
+
+        # List tools — must include session ID
+        list_headers = {**headers}
+        if session_id:
+            list_headers["Mcp-Session-Id"] = session_id
         resp = await http_client.post(
             url,
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
-                     "ngrok-skip-browser-warning": "true", "User-Agent": "devops-copilot-agent/0.2.0"},
+            headers=list_headers,
         )
         if resp.status_code == 200:
-            data = resp.json()
+            data = _parse_sse_or_json(resp)
             tools = data.get("result", {}).get("tools", [])
             logger.info("Discovered %d tools from %s", len(tools), path)
             return tools
@@ -135,9 +240,34 @@ async def discover_mcp_tools(path: str = "/mcp") -> list[dict]:
     return []
 
 
+def _parse_sse_or_json(resp: httpx.Response) -> dict:
+    """Parse response that may be SSE (data: ...) or plain JSON."""
+    text = resp.text.strip()
+    if text.startswith("data:"):
+        # Extract JSON from SSE format
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("data:"):
+                try:
+                    return json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    continue
+        return {}
+    try:
+        return resp.json()
+    except Exception:
+        return {}
+
+
 async def call_mcp_tool(path: str, tool_name: str, arguments: dict) -> Any:
     """Call an MCP tool via AgentGateway."""
     url = f"{MCP_GATEWAY_URL}{path}"
+    headers = await _mcp_headers()
+
+    # Include session ID if we have one for this endpoint
+    session_id = MCP_SESSION_IDS.get(path, "")
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
 
     try:
         resp = await http_client.post(
@@ -146,11 +276,10 @@ async def call_mcp_tool(path: str, tool_name: str, arguments: dict) -> Any:
                 "name": tool_name,
                 "arguments": arguments,
             }},
-            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream",
-                     "ngrok-skip-browser-warning": "true", "User-Agent": "devops-copilot-agent/0.2.0"},
+            headers=headers,
         )
         resp.raise_for_status()
-        data = resp.json()
+        data = _parse_sse_or_json(resp)
         result = data.get("result", data)
         logger.info("MCP tool %s result: %s", tool_name, str(result)[:200])
         return result
@@ -211,8 +340,8 @@ async def discover_all_tools() -> list[dict]:
 async def agent_loop(user_input: str, session_id: str) -> str:
     """
     Main agent loop:
-    1. Discover MCP tools
-    2. Send user message + tools to LLM
+    1. Discover MCP tools (authenticated via Okta JWT)
+    2. Send user message + tools to LLM (no auth needed)
     3. If LLM wants to call a tool → call it via MCP → feed result back
     4. Repeat until LLM gives a final text response
     """
@@ -257,15 +386,17 @@ async def agent_loop(user_input: str, session_id: str) -> str:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
-                    "content": json.dumps(tool_result, default=str),
+                    "content": json.dumps(tool_result) if isinstance(tool_result, dict) else str(tool_result),
                 })
 
-            continue  # Loop back to LLM with tool results
+            continue
 
         # Final text response
-        return message.get("content", "I couldn't generate a response.")
+        content = message.get("content", "No response from LLM")
+        logger.info("Agent loop complete after %d iterations", i + 1)
+        return content
 
-    return "I reached the maximum number of tool call iterations. Please try a simpler request."
+    return "Agent loop reached maximum iterations without a final response."
 
 
 # =============================================================================
@@ -274,116 +405,52 @@ async def agent_loop(user_input: str, session_id: str) -> str:
 
 @app.get("/health")
 async def health():
-    """Health check endpoint for AgentCore."""
-    return {
-        "status": "healthy",
-        "agent": AGENT_NAME,
-        "version": "0.2.0",
-        "llm_gateway": LLM_GATEWAY_URL,
-        "mcp_gateway": MCP_GATEWAY_URL,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    """Health check for AgentCore runtime."""
+    return {"status": "healthy", "agent": AGENT_NAME, "version": "0.3.0"}
 
 
-@app.post("/invoke")
 @app.post("/invocations")
 async def invoke(request: Request):
-    """
-    Main invocation endpoint for AgentCore runtime.
-    AgentCore calls /invocations, but we also keep /invoke for direct testing.
-    """
-    body = await request.json()
-    logger.info("Received invocation: %s", json.dumps(body, default=str)[:500])
+    """Main invocation endpoint for AgentCore.
 
-    user_input = body.get("input", body.get("message", body.get("prompt", "")))
-    session_id = body.get("sessionId", "unknown")
-
+    AgentCore sends requests here. The agent authenticates to AgentGateway
+    independently using its own Okta service account credentials.
+    """
     try:
-        response_text = await agent_loop(user_input, session_id)
+        body = await request.json()
+        user_input = body.get("input", body.get("prompt", ""))
+
+        if not user_input:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Missing 'input' or 'prompt' in request body"},
+            )
+
+        session_id = body.get("session_id", f"session-{datetime.now(timezone.utc).isoformat()}")
+        logger.info("Invocation received: session=%s input=%s", session_id, user_input[:100])
+
+        response = await agent_loop(user_input, session_id)
+
+        return JSONResponse(content={
+            "output": response,
+            "session_id": session_id,
+            "agent": AGENT_NAME,
+        })
+
     except Exception as e:
-        logger.exception("Agent loop failed")
-        response_text = f"Error: {e}"
-
-    return JSONResponse(content={
-        "output": response_text,
-        "sessionId": session_id,
-        "agent": AGENT_NAME,
-        "version": "0.2.0",
-    })
-
-
-@app.get("/tools")
-async def list_tools():
-    """List all discovered MCP tools and their routes."""
-    tools = await discover_all_tools()
-    return {
-        "tools": [
-            {
-                "name": t.get("name"),
-                "description": t.get("description", "")[:100],
-                "mcp_path": TOOL_ROUTE_MAP.get(t.get("name", ""), "unknown"),
-            }
-            for t in tools
-        ],
-        "total": len(tools),
-        "mcp_endpoints": MCP_ENDPOINTS,
-    }
+        logger.exception("Invocation failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)},
+        )
 
 
 @app.get("/")
 async def root():
-    """Root endpoint with agent info."""
-    return {
-        "agent": AGENT_NAME,
-        "version": "0.2.0",
-        "description": "DevOps Copilot — uses AgentGateway for LLM + MCP tools with Okta auth",
-        "config": {
-            "llm_gateway": LLM_GATEWAY_URL,
-            "mcp_gateway": MCP_GATEWAY_URL,
-            "model": LLM_MODEL,
-        },
-        "endpoints": {
-            "health": "GET /health",
-            "invoke": "POST /invoke",
-            "tools": "GET /tools",
-        },
-    }
-
-
-@app.post("/{path:path}")
-async def catch_all_post(path: str, request: Request):
-    """Catch-all POST handler to discover what AgentCore sends."""
-    body = await request.body()
-    headers = dict(request.headers)
-    logger.info("CATCH-ALL POST /%s | Headers: %s | Body: %s", path, json.dumps(headers)[:500], body.decode()[:500])
-
-    # Try to handle as an invoke request
-    try:
-        data = json.loads(body)
-        user_input = data.get("input", data.get("message", data.get("prompt", str(data))))
-        response_text = await agent_loop(user_input, "catch-all")
-        return JSONResponse(content={"output": response_text})
-    except Exception as e:
-        logger.error("Catch-all handler error: %s", e)
-        return JSONResponse(content={"output": f"Received at /{path}", "error": str(e)})
-
-
-@app.api_route("/{path:path}", methods=["GET", "PUT", "PATCH", "DELETE"])
-async def catch_all_other(path: str, request: Request):
-    """Catch-all for non-POST methods."""
-    logger.info("CATCH-ALL %s /%s", request.method, path)
-    return JSONResponse(content={"path": path, "method": request.method})
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    await http_client.aclose()
+    return {"agent": AGENT_NAME, "version": "0.3.0", "status": "running"}
 
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8080"))
-    logger.info("Starting %s on port %d", AGENT_NAME, port)
-    logger.info("LLM Gateway: %s", LLM_GATEWAY_URL)
-    logger.info("MCP Gateway: %s", MCP_GATEWAY_URL)
     uvicorn.run(app, host="0.0.0.0", port=port)

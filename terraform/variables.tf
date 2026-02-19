@@ -26,12 +26,6 @@ variable "agent_image_tag" {
   default     = "latest"
 }
 
-variable "agentgateway_endpoint" {
-  description = "Public HTTPS endpoint for AgentGateway on k8s-rooster (e.g. ngrok URL)"
-  type        = string
-  default     = "https://agentgateway.example.com"
-}
-
 variable "okta_org_name" {
   description = "Okta org name (e.g. dev-12345678)"
   type        = string
@@ -53,6 +47,12 @@ variable "agentgateway_llm_endpoint" {
   description = "Public HTTPS endpoint for AgentGateway LLM proxy (e.g. ngrok URL)"
   type        = string
   default     = "https://llm-agentgateway.ngrok.app"
+}
+
+variable "agentgateway_mcp_endpoint" {
+  description = "Public HTTPS endpoint for AgentGateway MCP gateway (e.g. ngrok URL)"
+  type        = string
+  default     = "https://mcp-agentgateway.ngrok.app"
 }
 
 variable "agent_redirect_uri" {

@@ -1,4 +1,4 @@
-# Why Your AI Agents Need a Gateway: Securing AWS AgentCore with AgentGateway
+# Why Your AI Agents Need a Gateway (And Why It Shouldn't Be Your Cloud Provider's)
 
 You wouldn't deploy microservices without an API gateway. So why are teams deploying AI agents with direct, ungoverned access to LLMs and external tools?
 
@@ -6,7 +6,9 @@ If you're running agents on AWS Bedrock AgentCore — or anywhere else — and t
 
 [AgentGateway](https://github.com/agentgateway/agentgateway) fixes this. It's an open-source (CNCF) gateway purpose-built for AI agent traffic — both LLM calls and MCP tool calls — giving you a single control plane for everything your agents talk to.
 
-This post walks through why you need it, how the auth chain works end-to-end, and how the [aws-agentcore-demo](https://github.com/ProfessorSeb/aws-agentcore-demo) wires it all together.
+But here's the thing: you don't need *another* gateway from your cloud provider to do it. AgentGateway is your gateway — for auth, RBAC, observability, and security. Your cloud just provides compute.
+
+This post walks through why, how the auth chain works end-to-end, and how the [aws-agentcore-demo](https://github.com/ProfessorSeb/aws-agentcore-demo) wires it all together.
 
 ---
 
@@ -28,6 +30,21 @@ Every team solving these problems independently is wasted engineering. Worse, mo
 
 ---
 
+## The Trap: Another Vendor Gateway
+
+Cloud providers see this problem too. Their solution? Another managed service. AWS has AgentCore Gateway. Others will follow.
+
+But think about what that means:
+
+- **You're locked in.** That gateway only works on AWS. Move to GCP, Azure, or on-prem? Rebuild your auth, RBAC, and observability from scratch.
+- **Double the gateways.** Now you have a cloud gateway *and* your actual governance layer. Two hops, two configurations, two things to debug.
+- **Weakest-link security.** If your cloud gateway does JWT validation but your real tools don't, you have a false sense of security. If both do it, you're paying for redundancy.
+- **Vendor roadmap dependency.** Need scope-based MCP RBAC? PII filtering? Prompt injection detection? You're waiting on their feature backlog.
+
+The right answer: use your cloud provider for what it's good at — **compute** — and use a purpose-built, portable gateway for **governance**.
+
+---
+
 ## The Solution: AgentGateway
 
 AgentGateway sits between your agents and everything they talk to. LLMs and MCP tool servers both route through it.
@@ -37,13 +54,14 @@ This isn't Envoy with some AI plugins bolted on. AgentGateway is a purpose-built
 - **LLM protocols** — OpenAI-compatible chat completions, streaming, token counting
 - **MCP protocol** — tool discovery, tool invocation, server lifecycle
 - **Agent-specific policies** — PII redaction, prompt injection detection, per-user token budgets
+- **JWT authentication** — validate Okta/Entra/any OIDC tokens on MCP routes with scope-based RBAC
 
 Two logical functions, one binary:
 
 1. **LLM Proxy** — OpenAI-compatible endpoint that routes to any provider (Anthropic, OpenAI, xAI, local models)
-2. **MCP Gateway** — aggregates multiple MCP servers, presents a unified tool catalog to agents
+2. **MCP Gateway** — aggregates multiple MCP servers, presents a unified tool catalog to agents, enforces auth + RBAC
 
-Your agent code doesn't change. Point it at AgentGateway instead of the LLM provider directly. That's it.
+Your agent code barely changes. Point it at AgentGateway instead of the LLM provider directly. Add a Bearer token to MCP calls. That's it.
 
 ---
 
@@ -52,102 +70,108 @@ Your agent code doesn't change. Point it at AgentGateway instead of the LLM prov
 The [aws-agentcore-demo](https://github.com/ProfessorSeb/aws-agentcore-demo) is a working reference architecture. Here's what's actually running:
 
 ```
-┌─────────────────────────┐
-│   AWS Bedrock AgentCore  │
-│  ┌─────────────────────┐ │
-│  │ Agent Container      │ │
-│  │ (arm64, Python/      │ │
-│  │  FastAPI)            │ │
-│  └────────┬─────────────┘ │
-└───────────┼───────────────┘
-            │ ngrok tunnels
-            ▼
-┌─────────────────────────────┐
-│  k8s-rooster (on-prem k8s)  │
-│                              │
-│  ┌────────────────────────┐  │
-│  │    AgentGateway         │  │
-│  │  ┌──────┐ ┌──────────┐ │  │
-│  │  │ LLM  │ │   MCP    │ │  │
-│  │  │Proxy │ │ Gateway  │ │  │
-│  │  └──┬───┘ └────┬─────┘ │  │
-│  └─────┼──────────┼───────┘  │
-└────────┼──────────┼──────────┘
-         │          │
-    ┌────▼───┐  ┌───▼────────┐
-    │Anthropic│  │MCP Servers │
-    │OpenAI   │  │- Slack     │
-    │xAI      │  │- GitHub    │
-    └─────────┘  │- Tools     │
-                 └────────────┘
+┌───────────────────────────────┐
+│   AWS Bedrock AgentCore        │
+│  ┌───────────────────────────┐ │
+│  │ Agent Container            │ │
+│  │ (arm64, Python/FastAPI)    │ │
+│  │                            │ │
+│  │ Gets Okta JWT              │ │
+│  │ (client_credentials)       │ │
+│  └──────┬──────────┬──────────┘ │
+│         │          │            │
+│  ┌──────▼──┐  ┌────▼─────────┐ │
+│  │ Runtime  │  │ (no gateway) │ │
+│  │ Endpoint │  │              │ │
+│  └─────────┘  └──────────────┘ │
+└────────────────────┼────────────┘
+                     │ ngrok tunnels
+                     ▼
+┌────────────────────────────────────┐
+│  k8s-rooster (on-prem k8s)         │
+│                                     │
+│  AgentGateway (Enterprise)          │
+│  ┌──────────┐ ┌──────────────────┐ │
+│  │  LLM     │ │  MCP             │ │
+│  │  Proxy   │ │  Gateway         │ │
+│  │ (no auth)│ │ (Okta JWT auth)  │ │
+│  │          │ │ (scope RBAC)     │ │
+│  └────┬─────┘ └──────┬───────────┘ │
+└───────┼──────────────┼─────────────┘
+        │              │
+   ┌────▼────┐  ┌──────▼──────────┐
+   │Anthropic│  │  MCP Servers     │
+   │OpenAI   │  │  - Slack         │
+   │xAI      │  │  - GitHub        │
+   └─────────┘  │  - Tools         │
+                └─────────────────┘
 ```
 
 **The agent container** runs on AgentCore as an arm64 Python/FastAPI application. It doesn't hold any LLM API keys. It knows two endpoints: AgentGateway's LLM proxy and MCP gateway.
 
-**LLM calls** go through AgentGateway's OpenAI-compatible proxy. The agent calls `/anthropic/v1/chat/completions` — AgentGateway routes it to Anthropic, applies policies, logs the interaction, and returns the response.
+**LLM calls** go through AgentGateway's OpenAI-compatible proxy — no auth needed. AgentGateway holds the API keys (stored as Kubernetes Secrets, managed by ArgoCD), applies policies, logs the interaction, and returns the response.
 
-**MCP tool calls** go through AgentGateway's MCP gateway. The agent discovers available tools (Slack messaging, GitHub operations, general utilities) through a single endpoint. AgentGateway aggregates multiple upstream MCP servers into one catalog.
+**MCP tool calls** go through AgentGateway's MCP gateway. The agent includes its Okta JWT (obtained via `client_credentials` grant) in every MCP request. AgentGateway validates the token, checks scopes, and enforces RBAC before the tool call reaches the upstream MCP server.
 
 **Connectivity** between AWS and the on-prem k8s-rooster cluster uses ngrok tunnels — pragmatic for a demo. In production, you'd use VPC peering, PrivateLink, or similar.
 
-**Infrastructure** is fully codified: Terraform manages AWS + Okta, ArgoCD handles everything on Kubernetes.
+**No AgentCore Gateway.** The agent container is invoked directly through the AgentCore Runtime endpoint. AWS IAM controls who can invoke the agent. AgentGateway controls what the agent can do.
 
 ---
 
-## Authentication: End-to-End Token Lifecycle
+## Authentication: End-to-End
 
-This is where it matters for regulated environments. Every request traverses an authenticated chain — from human identity through agent execution to downstream tool invocation. **No ambient credentials, no hardcoded API keys in agent code, no unauthenticated hops.**
+Every MCP request traverses an authenticated chain — from AWS IAM through Okta to tool invocation. **No ambient credentials, no hardcoded API keys in agent code, no unauthenticated MCP hops.**
 
-### The Identity Stack
+### The Auth Stack
 
 ```mermaid
 sequenceDiagram
-    participant U as User
+    participant I as Invoker
+    participant IAM as AWS IAM
+    participant R as AgentCore Runtime
+    participant A as Agent
     participant O as Okta
-    participant GW as AgentCore Gateway
-    participant A as Agent Runtime
     participant AG as AgentGateway
     participant LLM as LLM Provider
     participant MCP as MCP Tools
 
-    U->>O: Authenticate (AuthZ Code + PKCE)
-    O-->>U: JWT (iss, aud, sub, scp)
-    U->>GW: Request + Bearer JWT
-    GW->>GW: Validate JWT (JWKS, iss, aud, exp)
-    GW->>A: Forward + identity context
-    A->>AG: LLM request (no API key needed)
+    I->>IAM: invoke-agent-runtime (SigV4)
+    IAM->>R: Authorized → forward to agent
+    R->>A: POST /invocations
+
+    A->>O: client_credentials grant
+    O-->>A: JWT (iss, aud, scp: mcp:read mcp:write)
+
+    A->>AG: LLM request (no auth needed)
     AG->>AG: PII redaction, injection guard
     AG->>LLM: Forward (AG injects API key)
     LLM-->>AG: Response
     AG->>AG: Credential leak check
     AG-->>A: Sanitized response
-    A->>AG: MCP tool call + OBO token
-    AG->>AG: Validate OBO token, check scopes
-    AG->>MCP: Execute as user
+
+    A->>AG: MCP tool call + Bearer JWT
+    AG->>AG: Validate JWT (JWKS, iss, aud, exp)
+    AG->>AG: Check scopes vs tool (RBAC)
+    AG->>AG: Check deny list (destructive ops)
+    AG->>MCP: Execute tool call
     MCP-->>AG: Result
     AG-->>A: Tool result
-    A-->>GW: Final response
-    GW-->>U: Response
+
+    A-->>R: Final response
+    R-->>I: Response
 ```
+
+### Two Layers of Access Control
+
+**Layer 1: AWS IAM** — controls who can invoke the agent. Standard AWS access management. You already know this.
+
+**Layer 2: AgentGateway (Okta JWT + RBAC)** — controls what the agent can do with MCP tools. This is where it gets interesting.
 
 ### Okta Configuration
 
-Two OAuth2 apps enforce separation of human identity from machine identity:
+One OAuth2 service app provides the agent's identity:
 
-**App 1 — User-Facing Client** (Authorization Code + PKCE):
-```hcl
-resource "okta_app_oauth" "agentcore_client" {
-  label                      = "devops-copilot-client"
-  type                       = "web"
-  grant_types                = ["authorization_code", "refresh_token"]
-  redirect_uris              = [var.agent_redirect_uri]
-  token_endpoint_auth_method = "client_secret_basic"
-  response_types             = ["code"]
-}
-```
-Used by: the human user authenticating via browser. PKCE mitigates authorization code interception attacks.
-
-**App 2 — Agent Service** (Machine-to-Machine):
 ```hcl
 resource "okta_app_oauth" "agentcore_service" {
   label                      = "devops-copilot-service"
@@ -157,104 +181,64 @@ resource "okta_app_oauth" "agentcore_service" {
   response_types             = ["token"]
 }
 ```
-Used by: AgentCore for On-Behalf-Of token exchange. The agent service authenticates itself, then exchanges the user's token for a delegated token with MCP scopes.
 
-**Custom MCP scopes** control fine-grained tool access:
-- `mcp:read` — read-only tool access (list channels, get issues)
-- `mcp:write` — write tool access (post messages, create issues)
-- `mcp:admin` — admin operations (requires explicit user consent)
+Custom MCP scopes control fine-grained tool access:
 
 ```hcl
 resource "okta_auth_server_scope" "mcp_read" {
-  auth_server_id = data.okta_auth_server.default.id
-  name           = "mcp:read"
-  consent        = "IMPLICIT"
+  name    = "mcp:read"
+  consent = "IMPLICIT"
+}
+
+resource "okta_auth_server_scope" "mcp_write" {
+  name    = "mcp:write"
+  consent = "IMPLICIT"
 }
 
 resource "okta_auth_server_scope" "mcp_admin" {
-  auth_server_id = data.okta_auth_server.default.id
-  name           = "mcp:admin"
-  consent        = "REQUIRED"  # Explicit user consent required
+  name    = "mcp:admin"
+  consent = "REQUIRED"  # Explicit consent required
 }
 ```
 
-### Step-by-Step Token Flow
+### How the Agent Gets Its Token
 
-**Step 1 — User authenticates, Okta issues JWT:**
+The agent uses `client_credentials` — simple, no user interaction:
 
-```bash
-# Client credentials grant (for demo/testing)
-curl -s -X POST \
-  "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698/v1/token" \
-  -d "grant_type=client_credentials&scope=mcp:read mcp:write" \
-  -u "${CLIENT_ID}:${CLIENT_SECRET}"
+```python
+async def get_okta_token() -> str:
+    """Get Okta JWT via client_credentials. Cached with 5-min buffer."""
+    if _token_cache["access_token"] and time.time() < _token_cache["expires_at"] - 300:
+        return _token_cache["access_token"]
+
+    resp = await http_client.post(
+        OKTA_TOKEN_URL,
+        data={"grant_type": "client_credentials", "scope": "mcp:read mcp:write"},
+        auth=(OKTA_CLIENT_ID, OKTA_CLIENT_SECRET),
+    )
+    data = resp.json()
+    _token_cache["access_token"] = data["access_token"]
+    _token_cache["expires_at"] = time.time() + data.get("expires_in", 3600)
+    return data["access_token"]
 ```
 
-Decoded JWT payload:
+The JWT payload:
 ```json
 {
   "iss": "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698",
   "aud": "api://default",
-  "sub": "jane.doe@example.com",
+  "sub": "0oa...",
   "scp": ["mcp:read", "mcp:write"],
-  "exp": 1739544600,
-  "iat": 1739541000
+  "exp": 1739544600
 }
 ```
 
-Key claims: `sub` is the human identity (carried through the entire chain), `scp` controls exactly what MCP tools this user can invoke, `exp` enforces 1-hour token lifetime.
-
-**Step 2 — AgentCore Gateway validates JWT:**
-
-```bash
-aws bedrock-agentcore-control create-gateway \
-  --name "devops-copilot-gateway" \
-  --protocol-type "MCP" \
-  --authorizer-type "CUSTOM_JWT" \
-  --authorizer-configuration '{
-    "customJWTAuthorizer": {
-      "discoveryUrl": "https://integrator-7147223.okta.com/oauth2/aus104zseyg64swj3698/.well-known/openid-configuration",
-      "allowedAudience": ["api://default"]
-    }
-  }'
+Every MCP call includes this token:
+```python
+headers["Authorization"] = f"Bearer {token}"
 ```
 
-The gateway validates on every request: JWT signature (RS256 via JWKS), issuer, audience (`api://default`), and expiration. Invalid tokens → `401 Unauthorized`. The agent never sees invalid requests.
-
-**Step 3 — Agent receives authenticated request, zero secrets:**
-
-The agent container has **no LLM API keys, no Okta secrets, no tool credentials**. It only knows two URLs: AgentGateway's LLM proxy and MCP gateway. A compromised agent cannot escalate privileges because it holds no credentials to escalate with.
-
-**Step 4 — Agent calls LLM through AgentGateway:**
-
-AgentGateway is the **only** component with LLM API keys (stored as Kubernetes Secrets, managed by ArgoCD). Before forwarding to the LLM provider, it applies security policies — PII redaction, prompt injection guard, credential leak protection. The request is traced to Langfuse with the user's identity attached.
-
-**Step 5 — On-Behalf-Of token exchange for MCP tools:**
-
-When the agent needs to call Slack or GitHub, AgentCore's OAuth2 credential provider handles the token exchange:
-
-```hcl
-resource "null_resource" "okta_credential_provider" {
-  provisioner "local-exec" {
-    command = <<-EOT
-      aws bedrock-agentcore-control create-oauth2-credential-provider \
-        --name "devops-copilot-okta-obo" \
-        --credential-provider-vendor "CustomOIDC" \
-        --oauth2-provider-config-properties '{
-          "issuer": "${self.triggers.issuer}",
-          "clientId": "${self.triggers.client_id}",
-          "clientSecret": "${self.triggers.client_secret}",
-          "tokenEndpoint": "${self.triggers.issuer}/v1/token",
-          "scopes": ["openid", "mcp:read", "mcp:write"]
-        }'
-    EOT
-  }
-}
-```
-
-The service app exchanges the user's token for a new OBO token that carries the original user's identity + MCP scopes. When the agent posts a Slack message, it appears **as the user**. When it creates a GitHub issue, it's **attributed to the user**. The agent never has standing access to these tools.
-
-**Step 6 — AgentGateway enforces three layers of MCP access control:**
+### AgentGateway Enforces Three Layers of MCP Access Control
 
 **Layer 1: JWT Authentication** — Enterprise policy validates Okta JWTs on every MCP request. No valid token = no tool access.
 
@@ -266,7 +250,9 @@ traffic:
     - issuer: "https://your-okta.okta.com/oauth2/your-auth-server"
       audiences: ["api://default"]
       jwks:
-        inline: '<JWKS from Okta>'
+        remote:
+          url: "https://your-okta.okta.com/oauth2/your-auth-server/v1/keys"
+          cacheDuration: 3600s
 ```
 
 **Layer 2: Scope-Based RBAC** — CEL expressions match JWT scopes to tool operations:
@@ -282,6 +268,10 @@ backend:
           claims.scp.exists(s, s == 'mcp:read') && (
             tool.name.startsWith('list_') || tool.name.startsWith('get_')
           )
+        - >-
+          claims.scp.exists(s, s == 'mcp:write') && (
+            tool.name.startsWith('post_') || tool.name.startsWith('create_')
+          )
 ```
 
 | Scope | Allowed | Denied |
@@ -295,15 +285,34 @@ Key detail: `tools/list` responses are **filtered** (unauthorized tools hidden f
 **Layer 3: Destructive Operation Blocking** — always denied regardless of scope:
 
 ```yaml
-authorization:
-  action: Deny
-  policy:
-    matchExpressions:
-    - >-
-      tool.name.contains('delete') || tool.name.contains('merge_pull_request')
+denyPolicy:
+  matchExpressions:
+  - >-
+    tool.name.contains('delete') || tool.name.contains('merge_pull_request')
 ```
 
-Rate limiting applies per-user (the identified human, not the agent). Every tool call is traced with user identity.
+---
+
+## Why Not Both Gateways?
+
+"Why not keep the AgentCore Gateway *and* use AgentGateway?"
+
+You can. But you shouldn't. Here's why:
+
+1. **Redundant JWT validation.** Both validate the same Okta token. One is enough. Having two means debugging auth failures in two places.
+
+2. **AgentCore Gateway can't do what matters.** It validates JWTs. Great. But it doesn't do PII filtering, prompt injection detection, scope-based MCP RBAC, rate limiting per token budget, or LLM failover. You need AgentGateway for all of that anyway.
+
+3. **Portability.** The `EnterpriseAgentgatewayPolicy` you write for AWS works identically on GKE, AKS, bare metal, or your laptop. The AgentCore Gateway works on AWS only.
+
+4. **Fewer moving parts.** One gateway, one auth config, one place to look when something breaks.
+
+The demo architecture is intentionally minimal:
+- **AWS provides compute** (AgentCore Runtime)
+- **AgentGateway provides governance** (auth, RBAC, security, observability)
+- **Okta provides identity** (JWT tokens)
+
+Each component does one thing well.
 
 ---
 
@@ -330,146 +339,29 @@ rate_limiting:
       - tokens_per_minute: 5000
 ```
 
-Per-user limits (identified from JWT `sub` claim) prevent any single user from monopolizing capacity.
+Per-identity limits (from JWT `sub` claim) prevent any single agent or user from monopolizing LLM capacity.
 
-**Model failover** keeps agents running when providers have issues:
+**Multi-provider failover:** Configure primary and fallback providers. Anthropic down? AgentGateway routes to OpenAI automatically — your agent code doesn't change.
 
-```yaml
-failover:
-  primary: anthropic/claude-sonnet-4-20250514
-  fallback:
-    - openai/gpt-4o
-    - xai/grok-3
-  trigger:
-    - status_code: 529  # overloaded
-    - timeout_ms: 30000
-```
+### Observability
 
-If Anthropic returns a 529, the request automatically retries against OpenAI. Your agent doesn't know or care.
+Every LLM call and MCP tool invocation is traced end-to-end:
 
-**Path-based routing** exposes multiple providers on a single gateway:
-
-```
-/anthropic/v1/* → Anthropic Claude
-/openai/v1/*    → OpenAI GPT-4
-/xai/v1/*       → xAI Grok
-```
-
-### Observability: Dual Export
-
-Telemetry exports to two systems simultaneously via an OpenTelemetry Collector with fan-out:
-
-**Langfuse** (OTLP) — the LLM-focused view:
-- Token usage and costs per request, per user, per agent
-- Full prompt and completion logging
-- Trace waterfalls: user request → LLM call → tool call → tool response → final response
-
-**ClickHouse + Solo UI** — the infrastructure view:
-- Gateway throughput and latency metrics
-- Policy enforcement statistics (PII redactions, blocked injections)
-- Route analytics across providers
-
-Every LLM call and MCP tool invocation is traced end-to-end with correlated trace IDs. When something goes wrong, follow a single request from user through agent, through gateway, to LLM and tools, and back.
+- **Langfuse** — LLM-specific traces with prompt/completion pairs, token usage, latency, cost
+- **ClickHouse** — raw OTLP spans for custom dashboards and alerting
+- **Identity attribution** — every trace tagged with the JWT identity that triggered it
 
 ---
 
-## Security Properties: What Compliance Teams Care About
+## The Takeaway
 
-### Zero Trust
+Your cloud provider should run your agents. It shouldn't govern them.
 
-| Principle | Enforcement |
-|-----------|-------------|
-| Every hop authenticated | User→Okta→JWT→Gateway validates→Agent receives identity→AgentGateway validates OBO→Tools |
-| No ambient authority | Agent container has zero secrets; cannot call anything without going through AgentGateway |
-| Least privilege | MCP scopes control exactly what tools each user can invoke |
-| Token expiration | 60-minute access tokens validated at every hop |
+AgentGateway gives you one place to enforce auth, RBAC, security policies, rate limits, and observability — regardless of where your agents run. Write the policy once, deploy it anywhere.
 
-### Audit Trail
+The [aws-agentcore-demo](https://github.com/ProfessorSeb/aws-agentcore-demo) proves it: a fully functional agent on AWS Bedrock AgentCore, with zero vendor-specific gateways, and complete governance through AgentGateway.
 
-Every operation produces a traceable record:
-
-```
-User Request (trace-id: abc-123)
-  ├── Gateway: JWT validated for jane.doe@example.com
-  ├── LLM Call: claude-sonnet-4, 1,247 input tokens, $0.0034
-  │   ├── PII redacted: 2 email addresses, 1 phone number
-  │   └── Prompt injection: none detected
-  ├── MCP Tool: slack.list_channels (mcp:read) → 200 OK
-  ├── MCP Tool: slack.post_message (mcp:write) → 200 OK
-  └── Response returned [latency: 3.2s]
-```
-
-### Secrets Management
-
-| Secret | Location | Accessible By |
-|--------|----------|---------------|
-| LLM API keys | Kubernetes Secrets (ArgoCD-managed) | AgentGateway only |
-| Okta client secrets | Terraform state + AWS Secrets Manager | AgentCore credential provider only |
-| Agent container credentials | **None** | N/A — zero secrets |
-
-Credential rotation doesn't require agent redeployment. Update the gateway config; agents are unaffected.
-
-### With vs Without Gateway
-
-| Concern | Without Gateway | With AgentGateway |
-|---------|----------------|-------------------|
-| **API Keys** | Embedded in agent code | Centralized in gateway; agent has zero secrets |
-| **Auth** | Each agent implements own | Okta JWT + OBO enforced at gateway |
-| **PII** | Sent directly to LLM providers | Redacted at gateway before reaching any provider |
-| **Audit** | Manual logging per agent | Automatic tracing on every call with user identity |
-| **Rate Limits** | Per-agent, easily bypassed | Per-user, centrally enforced |
-| **Key Rotation** | Redeploy every agent | Update gateway config; zero agent changes |
-| **Blast Radius** | Compromised agent has full API key access | Compromised agent has no credentials |
-
----
-
-## FAQ: Why Two Gateways?
-
-If you're looking at this architecture and thinking "wait, there are TWO gateways?" — you're right, and they do very different things.
-
-**AgentCore Gateway** is an AWS-managed service. It's the MCP protocol bridge that connects the AgentCore runtime to your MCP tool servers. It handles identity verification at the AWS edge (validating Okta JWTs via OIDC discovery) and manages the MCP connection lifecycle. It exists because AWS requires a managed control point for agents to discover and connect to external tools. Think of it as the **front door** — it answers "is this agent allowed to connect?"
-
-**Agentgateway** is the self-hosted governance layer running on your Kubernetes cluster. It's where the actual security policies live: PII protection, prompt injection guards, credential leak detection, rate limiting, multi-provider LLM routing, scope-based MCP authorization, and full observability via Langfuse and ClickHouse. Think of it as the **policy engine** — it answers "what can this agent do, and how do we track it?"
-
-The request flow with both:
-
-```
-Agent → AgentCore Gateway (AWS, identity) → ngrok → Agentgateway (k8s, policy) → LLMs/Tools
-```
-
-**Do you always need both?** No. The AgentCore Gateway is only required when hosting agents on AWS Bedrock AgentCore — it's the AWS-managed entry point for MCP protocol routing. If you're self-hosting agents (on Kubernetes, bare metal, or any other platform), your agents connect directly to Agentgateway and it handles everything — identity, authorization, routing, policies, and observability — in one place:
-
-```
-Agent → Agentgateway (identity + policy) → LLMs/Tools
-```
-
-The key insight: Agentgateway is the governance layer you need regardless of where your agents run. AgentCore Gateway is the additional AWS component you need when running on their managed platform. They complement each other, but Agentgateway is the one doing the heavy lifting on security and observability.
-
----
-
-## Why This Matters for Production
-
-The parallel to API gateways in the microservices era is exact. In 2015, teams deployed services that called each other directly — no rate limiting, no circuit breaking, no centralized auth. Then API gateways and service meshes became standard infrastructure because you can't run production systems without governance.
-
-AI agents are at that same inflection point. The moment you have multiple teams deploying agents, multiple LLM providers, user-facing interactions, or any compliance requirements, you need a control plane.
-
-AgentGateway gives you:
-
-- **One policy layer** for all agent traffic, LLM and tool calls alike
-- **Identity-aware governance** — Okta JWT + OBO, per-user rate limits, scope-based tool access
-- **Full audit trail** — every prompt, response, and tool call traced to a specific human user
-- **Declarative configuration** in YAML, managed via GitOps
-- **Provider independence** — swap LLMs without touching agent code
-- **Cost governance** — per-user, per-provider rate limits on both requests and tokens
-
----
-
-## Try It
-
-The full working demo is at [ProfessorSeb/aws-agentcore-demo](https://github.com/ProfessorSeb/aws-agentcore-demo) — includes Terraform for AWS + Okta, the agent container code, and a detailed [auth flow deep-dive](auth-flow-deep-dive.md) with runnable verification commands.
-
-The backing Kubernetes cluster configuration lives at [ProfessorSeb/k8s-rooster](https://github.com/ProfessorSeb/k8s-rooster).
-
-AgentGateway itself is at [agentgateway/agentgateway](https://github.com/agentgateway/agentgateway) — CNCF open-source, Apache 2.0 licensed.
-
-The agent infrastructure space is moving fast. AgentCore, MCP, and agent gateways are all weeks-to-months old. The teams that build governance into their agent platform now — rather than bolting it on after an incident — are the ones that'll actually get agents into production. Start with the gateway.
+**Resources:**
+- [AgentGateway GitHub](https://github.com/agentgateway/agentgateway)
+- [Enterprise AgentGateway](https://www.solo.io/products/agentgateway)
+- [Demo repo](https://github.com/ProfessorSeb/aws-agentcore-demo)

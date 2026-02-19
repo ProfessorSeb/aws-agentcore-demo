@@ -1,7 +1,7 @@
 ###############################################################################
 # Okta Provider & App Registrations
-# Provides OAuth2 identity for on-behalf-of (OBO) agent flows:
-#   User → Okta → AgentCore → AgentGateway → MCP Tools
+# Provides OAuth2 identity for agent → AgentGateway MCP authentication:
+#   User → (IAM) → AgentCore Runtime → Agent → (Okta JWT) → AgentGateway → MCP
 ###############################################################################
 
 provider "okta" {
@@ -19,7 +19,7 @@ data "okta_auth_server" "default" {
 }
 
 ###############################################################################
-# Custom Scopes — MCP tool access
+# Custom Scopes — MCP tool access (validated by AgentGateway)
 ###############################################################################
 
 resource "okta_auth_server_scope" "mcp_read" {
@@ -48,7 +48,7 @@ resource "okta_auth_server_scope" "mcp_admin" {
 
 ###############################################################################
 # App 1 — User-Facing Client (Authorization Code + PKCE)
-# The human authenticates here; token gets exchanged for agent downstream
+# For future user-facing UIs that need human identity
 ###############################################################################
 
 resource "okta_app_oauth" "agentcore_client" {
@@ -59,12 +59,11 @@ resource "okta_app_oauth" "agentcore_client" {
   post_logout_redirect_uris  = [var.agent_post_logout_uri]
   token_endpoint_auth_method = "client_secret_basic"
   response_types             = ["code"]
-
 }
 
 ###############################################################################
 # App 2 — Agent Service (Machine-to-Machine)
-# AgentCore uses this for client_credentials + token exchange (OBO)
+# The agent uses client_credentials to get a JWT for AgentGateway MCP calls
 ###############################################################################
 
 resource "okta_app_oauth" "agentcore_service" {
@@ -122,6 +121,11 @@ output "okta_jwks_uri" {
   value       = "https://${var.okta_org_name}.${var.okta_base_url}/oauth2/${data.okta_auth_server.default.id}/v1/keys"
 }
 
+output "okta_token_url" {
+  description = "Token endpoint for client_credentials grant"
+  value       = "https://${var.okta_org_name}.${var.okta_base_url}/oauth2/${data.okta_auth_server.default.id}/v1/token"
+}
+
 output "okta_client_id" {
   description = "User-facing app client ID"
   value       = okta_app_oauth.agentcore_client.client_id
@@ -134,12 +138,12 @@ output "okta_client_secret" {
 }
 
 output "okta_service_client_id" {
-  description = "Agent service client ID"
+  description = "Agent service client ID (set as OKTA_CLIENT_ID in agent env)"
   value       = okta_app_oauth.agentcore_service.client_id
 }
 
 output "okta_service_client_secret" {
-  description = "Agent service client secret"
+  description = "Agent service client secret (set as OKTA_CLIENT_SECRET in agent env)"
   value       = okta_app_oauth.agentcore_service.client_secret
   sensitive   = true
 }

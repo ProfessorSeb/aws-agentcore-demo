@@ -16,6 +16,9 @@ resource "aws_ecr_repository" "agent" {
 
 ###############################################################################
 # AgentCore Runtime (via AWS CLI — no native TF resource yet)
+#
+# The agent container connects directly to AgentGateway on k8s-rooster.
+# No AgentCore Gateway needed — AgentGateway handles all auth + governance.
 ###############################################################################
 
 resource "null_resource" "agent_runtime" {
