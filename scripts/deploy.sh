@@ -26,7 +26,7 @@ terraform init -upgrade
 
 echo ""
 echo "--- Step 2: Terraform Apply (IAM + ECR only first) ---"
-terraform apply -target=aws_ecr_repository.agent -target=aws_iam_role.agentcore_runtime -target=aws_iam_role.agentcore_gateway -auto-approve
+terraform apply -target=aws_ecr_repository.agent -target=aws_iam_role.agentcore_runtime -auto-approve
 
 # Step 2: Build and push agent container
 ECR_URI=$(terraform output -raw ecr_repository_url)
@@ -54,7 +54,5 @@ echo ""
 echo "Resource IDs:"
 [ -f runtime_id.txt ] && echo "  Runtime:  $(cat runtime_id.txt)"
 [ -f endpoint_id.txt ] && echo "  Endpoint: $(cat endpoint_id.txt)"
-[ -f gateway_id.txt ] && echo "  Gateway:  $(cat gateway_id.txt)"
-[ -f gateway_target_id.txt ] && echo "  Target:   $(cat gateway_target_id.txt)"
 echo ""
 echo "ECR: $ECR_URI"
