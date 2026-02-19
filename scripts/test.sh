@@ -12,7 +12,7 @@ echo "=== AWS AgentCore Demo — Test ==="
 # Check resource IDs
 echo ""
 echo "--- Resource Status ---"
-for f in runtime_id endpoint_id gateway_id gateway_target_id; do
+for f in runtime_id endpoint_id; do
   FILE="$TF_DIR/${f}.txt"
   if [ -f "$FILE" ]; then
     echo "  $f: $(cat "$FILE")"
@@ -43,20 +43,9 @@ if [ -f "$TF_DIR/endpoint_id.txt" ]; then
     --no-cli-pager --output json | jq '{status, name, agentRuntimeEndpointId}'
 fi
 
-# Check gateway status
-if [ -f "$TF_DIR/gateway_id.txt" ]; then
-  GATEWAY_ID=$(cat "$TF_DIR/gateway_id.txt")
-  echo ""
-  echo "--- Gateway Status ---"
-  aws --profile "$AWS_PROFILE" --region "$AWS_REGION" \
-    bedrock-agentcore-control get-gateway \
-    --gateway-identifier "$GATEWAY_ID" \
-    --no-cli-pager --output json | jq '{status, name, gatewayId}'
-fi
-
 echo ""
 echo "--- Local Agent Test ---"
 echo "To test locally: cd agent && python agent.py"
-echo "Then: curl -X POST http://localhost:8080/invoke -H 'Content-Type: application/json' -d '{\"input\": \"status\"}'"
+echo "Then: curl -X POST http://localhost:8080/invocations -H 'Content-Type: application/json' -d '{\"input\": \"status\"}'"
 echo ""
 echo "=== Test Complete ==="
