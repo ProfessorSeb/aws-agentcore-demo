@@ -11,7 +11,7 @@ The key design decision: **AWS provides compute, AgentGateway provides governanc
 ## Architecture Overview
 
 ```
-                        Citizens Network
+                        Infra Network
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                                                                              │
 │  ┌──────────────────────────┐                                                │
