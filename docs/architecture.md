@@ -4,309 +4,188 @@
 
 This demo connects three platforms to create a secure, governed agent system:
 
-- **AWS Bedrock AgentCore** — hosts and runs the agent container
-- **AgentGateway** (on k8s-rooster) — governs LLM calls and MCP tool access with tracing, rate limiting, and security policies
-- **Okta** — provides OAuth2 identity so the agent acts on behalf of authenticated users
+- **AWS Bedrock AgentCore** — hosts and runs the agent container (compute only)
+- **AgentGateway** (Enterprise, on k8s-rooster) — governs LLM calls and MCP tool access with auth, RBAC, tracing, rate limiting, and security policies
+- **Okta** — provides OAuth2 identity via client_credentials so the agent authenticates to AgentGateway
 
-The agent doesn't call LLMs or tools directly. Everything flows through AgentGateway, which provides a single control plane for security, observability, and policy enforcement.
+**Key design choice:** No AgentCore Gateway. AgentGateway handles ALL authentication and governance. AWS provides compute, AgentGateway provides control. This makes the architecture portable — the same AgentGateway policies work on AWS, GCP, Azure, or bare metal.
 
 ## Architecture Diagram
 
 ```
-                          ┌──────────────────────────────────────────────────┐
-                          │            AWS Bedrock AgentCore (us-east-1)     │
-                          │                                                  │
-                          │  ┌────────────────────────────────────────────┐  │
-                          │  │         Agent Hosting Runtime              │  │
-                          │  │                                            │  │
-                          │  │  ┌──────────────────────────────────────┐  │  │
-                          │  │  │       DevOps Copilot Agent           │  │  │
-                          │  │  │       (Python / FastAPI)             │  │  │
-                          │  │  │                                      │  │  │
-                          │  │  │  1. Receives /invocations request    │  │  │
-                          │  │  │  2. Discovers MCP tools              │  │  │
-                          │  │  │  3. Calls LLM via AgentGateway      │  │  │
-                          │  │  │  4. Executes tool calls via MCP     │  │  │
-                          │  │  │  5. Returns final response          │  │  │
-                          │  │  └──────┬───────────────┬───────────────┘  │  │
-                          │  └─────────┼───────────────┼──────────────────┘  │
-                          │            │               │                     │
-                          │  ┌─────────▼────┐  ┌───────▼──────────────────┐  │
-                          │  │  AgentCore   │  │  AgentCore Gateway      │  │
-                          │  │  Runtime     │  │  (MCP protocol)         │  │
-                          │  │  Endpoint    │  │                         │  │
-                          │  │              │  │  Authorizer: CUSTOM_JWT │  │
-                          │  │  (invoked    │  │  (Okta OIDC discovery)  │  │
-                          │  │   by users)  │  │                         │  │
-                          │  └──────────────┘  │  Target: agentgateway-  │  │
-                          │                    │  mcp (ngrok tunnel)     │  │
-                          │                    └───────────┬─────────────┘  │
-                          │                                │                │
-                          │  ┌──────────────┐  ┌───────────┼─────────────┐  │
-                          │  │ IAM Roles    │  │ Okta OAuth2 Credential  │  │
-                          │  │ • Runtime    │  │ Provider (OBO flow)     │  │
-                          │  │ • Gateway    │  └───────────┼─────────────┘  │
-                          │  └──────────────┘              │                │
-                          │                                │                │
-                          │  ┌──────────────┐              │                │
-                          │  │ ECR Repo     │              │                │
-                          │  │ (arm64 img)  │              │                │
-                          │  └──────────────┘              │                │
-                          └────────────────────────────────┼────────────────┘
-                                                           │
-                          ┌────────────────────────────────┼────────────────┐
-                          │        ngrok Tunnels           │                │
-                          │                                │                │
-                          │  mcp-agentgateway.ngrok.app ◄──┘                │
-                          │       → 172.16.10.168:30168                     │
-                          │                                                 │
-                          │  llm-agentgateway.ngrok.app                     │
-                          │       → 172.16.10.168:31572                     │
-                          └────────────────────┬────────────────────────────┘
-                                               │
-                          ┌────────────────────┼────────────────────────────┐
-                          │   k8s-rooster      │    (Talos K8s + ArgoCD)   │
-                          │                    │                            │
-                          │  ┌─────────────────▼────────────────────────┐   │
-                          │  │          AgentGateway (Enterprise)       │   │
-                          │  │                                          │   │
-                          │  │  ┌─────────────────┐ ┌────────────────┐  │   │
-                          │  │  │ LLM Gateway     │ │ MCP Gateway    │  │   │
-                          │  │  │ (port 8080)     │ │ (port 8090)    │  │   │
-                          │  │  │                 │ │                │  │   │
-                          │  │  │ /anthropic/* ──►│ │ /mcp ─────────►│──┼──►│ MCP Everything
-                          │  │  │   → Anthropic  │ │ /mcp/slack ───►│──┼──►│ Slack MCP
-                          │  │  │ /openai/* ────►│ │ /mcp-github ──►│──┼──►│ GitHub MCP
-                          │  │  │   → OpenAI    │ │                │  │   │
-                          │  │  └─────────────────┘ └────────────────┘  │   │
-                          │  │                                          │   │
-                          │  │  Policies:  PII protection              │   │
-                          │  │             Prompt injection guard       │   │
-                          │  │             Credential leak protection   │   │
-                          │  │             Rate limiting (xAI)         │   │
-                          │  │                                          │   │
-                          │  │  Tracing:   → Langfuse (OTLP)           │   │
-                          │  │             → ClickHouse (Solo UI)      │   │
-                          │  └──────────────────────────────────────────┘   │
-                          └────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│           AWS Bedrock AgentCore (us-east-1)       │
+│                                                    │
+│  ┌──────────────────────────────────────────────┐ │
+│  │        DevOps Copilot Agent                   │ │
+│  │        (Python / FastAPI / arm64)             │ │
+│  │                                               │ │
+│  │  1. Receives /invocations request             │ │
+│  │  2. Gets Okta JWT (client_credentials)        │ │
+│  │  3. Discovers GitHub MCP tools (JWT auth)     │ │
+│  │  4. Calls LLM via AgentGateway (no auth)      │ │
+│  │  5. Executes tool calls via MCP (JWT auth)    │ │
+│  │  6. Returns final response                    │ │
+│  └──────┬───────────────┬────────────────────────┘ │
+│         │               │                          │
+│  ┌──────▼────┐          │                          │
+│  │ Runtime   │    No AgentCore Gateway             │
+│  │ Endpoint  │    (removed — AG handles auth)      │
+│  └───────────┘          │                          │
+│                         │                          │
+│  ┌──────────┐  ┌────────┼──────────┐               │
+│  │ IAM Role │  │ ECR Repo (arm64)  │               │
+│  │ (runtime)│  └───────────────────┘               │
+│  └──────────┘           │                          │
+└─────────────────────────┼──────────────────────────┘
+                          │ ngrok tunnels
+   ┌──────────────────────┼────────────────┐
+   │  mcp-agentgateway.ngrok.app → :30168  │
+   │  llm-agentgateway.ngrok.app → :31572  │
+   └──────────────────────┼────────────────┘
+                          │
+   ┌──────────────────────▼────────────────────────┐
+   │   k8s-rooster (Talos K8s + ArgoCD)            │
+   │                                                │
+   │  ┌────────────────────────────────────────┐    │
+   │  │       AgentGateway (Enterprise)        │    │
+   │  │                                        │    │
+   │  │  LLM Gateway (port 8080/31572)         │    │
+   │  │  ├─ /anthropic/* → Anthropic (Claude)  │    │
+   │  │  ├─ /openai/* → OpenAI (GPT)           │    │
+   │  │  └─ No auth required (AG holds keys)   │    │
+   │  │                                        │    │
+   │  │  MCP Gateway (port 8090/30168)         │    │
+   │  │  ├─ /mcp-github → GitHub Copilot MCP   │    │
+   │  │  │   JWT auth (Strict) + scope RBAC    │    │
+   │  │  └─ /mcp → Everything (demo, no auth)  │    │
+   │  │                                        │    │
+   │  │  Policies: PII | Injection | Cred Leak │    │
+   │  │  Tracing: → Langfuse + ClickHouse      │    │
+   │  └────────────────────────────────────────┘    │
+   └────────────────────────────────────────────────┘
 
-                          ┌────────────────────────────────────────────────┐
-                          │                    Okta                        │
-                          │                                                │
-                          │  Org: integrator-7147223.okta.com              │
-                          │                                                │
-                          │  ┌──────────────────┐  ┌───────────────────┐   │
-                          │  │ devops-copilot-  │  │ devops-copilot-  │   │
-                          │  │ client           │  │ service          │   │
-                          │  │ (auth code flow) │  │ (client creds)   │   │
-                          │  └──────────────────┘  └───────────────────┘   │
-                          │                                                │
-                          │  Scopes: mcp:read, mcp:write, mcp:admin        │
-                          │  Auth Server: default (aus104zseyg64swj3698)    │
-                          │  Policy: AgentCore Policy + Allow MCP scopes   │
-                          └────────────────────────────────────────────────┘
+   ┌────────────────────────────────────────────────┐
+   │                    Okta                         │
+   │  Org: integrator-7147223.okta.com               │
+   │  Issuer: https://.../oauth2/default             │
+   │                                                  │
+   │  App: devops-copilot-service (client_credentials)│
+   │  Scopes: mcp:read, mcp:write, mcp:admin         │
+   └──────────────────────────────────────────────────┘
 ```
-
-## Why Two Gateways?
-
-A common question: **why does this architecture have both an AgentCore Gateway AND Agentgateway?** They serve fundamentally different roles.
-
-### AgentCore Gateway (AWS-Managed)
-
-The AgentCore Gateway is AWS's **MCP protocol bridge**. It's a managed AWS service that:
-
-- **Authenticates callers** at the AWS edge using Okta CUSTOM_JWT authorization
-- **Routes MCP protocol traffic** between the AgentCore runtime and your MCP server targets
-- **Manages the connection lifecycle** — the agent discovers MCP servers through this gateway
-
-Think of it as the **front door**: it answers "is this agent allowed to connect to tools at all?" It's required when running on AgentCore because AWS needs a managed control point for the MCP protocol handshake.
-
-### Agentgateway (Self-Hosted, on Kubernetes)
-
-Agentgateway is the **policy and governance engine**. It runs on your infrastructure and provides:
-
-- **Security policies** — PII protection, prompt injection guards, credential leak detection
-- **Multi-provider LLM routing** — `/anthropic/*` → Claude, `/openai/*` → GPT through one gateway
-- **MCP tool aggregation** — fans out to Slack, GitHub, and other MCP servers behind a single endpoint
-- **Rate limiting** — per-user request and token limits
-- **Full observability** — every LLM call and tool invocation traced to Langfuse + ClickHouse
-- **Fine-grained authorization** — CEL-based RBAC using JWT scopes (`mcp:read`, `mcp:write`, `mcp:admin`)
-
-Think of it as the **policy engine**: it answers "what is this agent allowed to DO, and how do we track it?"
-
-### Do You Need Both?
-
-**If you're running on AWS AgentCore**: Yes. The AgentCore Gateway is required for AgentCore's managed MCP routing. Agentgateway sits behind it and provides the governance layer that AgentCore doesn't offer natively.
-
-**If you're self-hosting agents** (not on AgentCore): You only need Agentgateway. Your agents connect directly to it, and it handles authentication, authorization, routing, and observability in one place. No AgentCore Gateway needed.
-
-The architecture looks like:
-
-```
-With AgentCore:     Agent → AgentCore Gateway (identity) → ngrok → Agentgateway (policy) → LLMs/Tools
-Without AgentCore:  Agent → Agentgateway (identity + policy) → LLMs/Tools
-```
-
-AgentCore Gateway is the AWS tax for managed agent hosting. Agentgateway is where the actual governance happens regardless of where your agents run.
 
 ## Request Flow
 
 ### 1. User Invokes Agent
 
 ```
-User/App → AWS AgentCore → POST /invocations → Agent Container
+User/App → AWS IAM (invoke-agent-runtime) → AgentCore Runtime → POST /invocations → Agent
 ```
 
-The user (or application) calls the AgentCore Runtime Endpoint. AgentCore spins up the agent container and forwards the request to `/invocations` on port 8080.
+AWS IAM controls who can invoke the agent. Standard AWS access management.
 
-### 2. Agent Discovers Tools
+### 2. Agent Gets Okta Token
 
 ```
-Agent → MCP Gateway (ngrok) → AgentGateway → MCP Servers
-  POST /mcp          → initialize + tools/list → Everything tools
-  POST /mcp/slack    → initialize + tools/list → Slack tools  
-  POST /mcp-github   → initialize + tools/list → GitHub tools
+Agent → Okta (client_credentials grant) → JWT with mcp:read, mcp:write scopes
 ```
 
-The agent calls each MCP endpoint to discover available tools. These are converted to OpenAI function-calling format for the LLM.
+The agent authenticates as a service account. Token is cached with a 5-minute expiry buffer.
 
-### 3. Agent Calls LLM
+### 3. Agent Discovers GitHub Tools
+
+```
+Agent + JWT → MCP Gateway (ngrok) → AgentGateway → GitHub Copilot MCP
+  POST /mcp-github → initialize (JWT validated) → tools/list → GitHub tools
+```
+
+AgentGateway validates the JWT, checks scopes, and returns the filtered tool list.
+
+### 4. Agent Calls LLM
 
 ```
 Agent → LLM Gateway (ngrok) → AgentGateway → Anthropic API
   POST /anthropic/v1/chat/completions
-    model: claude-sonnet-4-20250514
-    messages: [system prompt + user input]
-    tools: [discovered MCP tools in OpenAI format]
+    (no auth needed — AgentGateway injects API key)
+    (PII redaction + prompt injection guard applied)
 ```
 
-The agent sends the user's request plus available tools to Claude via AgentGateway. AgentGateway applies policies (PII protection, prompt injection guard) and traces the request to Langfuse.
-
-### 4. Agent Executes Tool Calls
-
-If the LLM decides to use a tool:
+### 5. Agent Executes Tool Calls
 
 ```
-LLM response: tool_calls: [{name: "slack_post_message", arguments: {...}}]
-  → Agent routes to /mcp/slack (based on tool discovery map)
-  → MCP tools/call → Slack MCP server → Slack API
+LLM response: tool_calls: [{name: "create_issue", arguments: {...}}]
+  → Agent routes to /mcp-github (from discovery map)
+  → MCP tools/call + JWT → AgentGateway validates → GitHub MCP → GitHub API
   → Result fed back to LLM
 ```
 
-The agent maintains a routing map from tool discovery, so each tool call goes to the correct MCP endpoint.
-
-### 5. Final Response
-
-The LLM produces a final text response (no more tool calls), which flows back:
+### 6. Final Response
 
 ```
 Agent → AgentCore → User/App
 ```
 
-## Auth Flow (Okta)
+## Auth Model
 
-```
-┌──────┐     ┌──────┐     ┌───────────┐     ┌─────────────┐     ┌──────────┐
-│ User │────►│ Okta │────►│ AgentCore │────►│ AgentGateway│────►│ MCP Tools│
-│      │     │      │     │  Gateway  │     │             │     │          │
-│      │ 1.  │      │ 2.  │           │ 3.  │             │ 4.  │          │
-│      │Auth │      │JWT  │ Validates │     │ Token       │     │ Delegated│
-│      │Code │      │Token│ via OIDC  │     │ Validation  │     │ Identity │
-│      │Flow │      │     │ Discovery │     │ (in case    │     │          │
-│      │     │      │     │           │     │  OAuth)     │     │          │
-└──────┘     └──────┘     └───────────┘     └─────────────┘     └──────────┘
-```
+Two layers of access control:
 
-1. **User authenticates** with Okta (authorization code + PKCE flow)
-2. **Okta issues JWT** with MCP scopes (`mcp:read`, `mcp:write`, `mcp:admin`)
-3. **AgentCore Gateway validates** the JWT using Okta's OIDC discovery URL
-4. **AgentGateway validates** the token for MCP tool access (on-behalf-of)
+| Layer | What | How |
+|-------|------|-----|
+| **AWS IAM** | Who can invoke the agent | `bedrock-agentcore:InvokeAgentRuntime` permission |
+| **AgentGateway + Okta** | What the agent can do | JWT validation + scope-based RBAC on MCP routes |
+
+**LLM calls:** No auth needed — AgentGateway holds provider API keys as K8s Secrets.
+
+**MCP calls:** Okta JWT required — `EnterpriseAgentgatewayPolicy` validates tokens in Strict mode.
 
 ## Infrastructure Components
 
-### Terraform-Managed (AWS)
+### Terraform-Managed (AWS + Okta)
 
-| Resource | Type | Description |
-|----------|------|-------------|
-| `aws_ecr_repository.agent` | Native TF | Container image repository |
-| `aws_iam_role.agentcore_gateway` | Native TF | Gateway service role (logs, secrets) |
-| `aws_iam_role.agentcore_runtime` | Native TF | Runtime role (ECR pull, Bedrock, logs) |
-| `null_resource.gateway` | local-exec CLI | AgentCore MCP gateway with Okta JWT auth |
-| `null_resource.gateway_target_mcp` | local-exec CLI | Gateway target → ngrok → AgentGateway |
-| `null_resource.agent_runtime` | local-exec CLI | Agent container runtime (arm64) |
-| `null_resource.agent_runtime_endpoint` | local-exec CLI | Public invocation endpoint |
-| `null_resource.okta_credential_provider` | local-exec CLI | Okta OAuth2 for OBO flow |
-
-### Terraform-Managed (Okta)
-
-| Resource | Type | Description |
-|----------|------|-------------|
-| `okta_app_oauth.agentcore_client` | Native TF | User-facing app (auth code + refresh) |
-| `okta_app_oauth.agentcore_service` | Native TF | Agent service app (client credentials) |
-| `okta_auth_server_scope.mcp_*` | Native TF | MCP scopes (read, write, admin) |
-| `okta_auth_server_policy.agentcore` | Native TF | Token policy for both apps |
-| `okta_auth_server_policy_rule.*` | Native TF | Allow MCP scopes for Everyone group |
+| Resource | Description |
+|----------|-------------|
+| `aws_ecr_repository.agent` | Container image repository |
+| `aws_iam_role.agentcore_runtime` | Runtime role (ECR pull, Bedrock, logs) |
+| `null_resource.agent_runtime` | Agent container runtime (arm64) |
+| `null_resource.agent_runtime_endpoint` | Invocation endpoint |
+| `okta_app_oauth.agentcore_service` | Service app (client_credentials) |
+| `okta_auth_server_scope.mcp_*` | MCP scopes (read, write, admin) |
 
 ### k8s-rooster (ArgoCD-Managed)
 
-| Component | Namespace | Description |
-|-----------|-----------|-------------|
-| AgentGateway Proxy | agentgateway-system | LLM gateway (port 8080/31572) |
-| MCP Gateway Proxy | agentgateway-system | Consolidated MCP gateway (port 8090/30168) |
-| Slack MCP Server | agentgateway-system | Slack tool server |
-| GitHub MCP Backend | agentgateway-system | GitHub Copilot MCP (api.githubcopilot.com) |
-| MCP Everything | agentgateway-system | Demo MCP tools |
-| Langfuse OTel Collector | agentgateway-system | Trace fan-out to Langfuse + ClickHouse |
-| Security Policies | agentgateway-system | PII, prompt injection, credential protection |
-| MCP JWT Auth (Enterprise) | agentgateway-system | Okta JWT validation on MCP routes (inline JWKS) |
-| MCP Tool RBAC | agentgateway-system | Scope-based tool access (read/write/admin via CEL) |
-| MCP Destructive Block | agentgateway-system | Always-deny for delete/destroy operations |
+| Component | Description |
+|-----------|-------------|
+| AgentGateway Proxy | LLM gateway (port 8080/31572) |
+| MCP Gateway Proxy | MCP gateway (port 8090/30168) |
+| GitHub MCP Backend | GitHub Copilot MCP (api.githubcopilot.com) + PAT auth |
+| Enterprise JWT Policy | Okta JWT validation on GitHub MCP route |
+| RBAC Policies | Scope-based tool access (read/write/admin via CEL) |
+| Destructive Block | Always-deny for delete/destroy operations |
+| Security Policies | PII, prompt injection, credential leak protection |
+| Langfuse OTel Collector | Trace fan-out to Langfuse + ClickHouse |
 
 ## Key Technical Decisions
 
 | Decision | Rationale |
 |----------|-----------|
-| **arm64 images only** | AgentCore runtime only supports arm64 architecture |
-| **CUSTOM_JWT at creation** | Gateway authorizer type cannot be changed after creation |
-| **Consolidated MCP gateway** | Single port (30168) for all MCP tools → single ngrok tunnel |
-| **`null_resource` + CLI** | No Terraform provider for AgentCore yet |
-| **ngrok for tunneling** | Connects AWS to on-prem k8s-rooster securely |
-| **Inline JWKS for MCP auth** | Static backends don't support TLS; Enterprise policy with inline JWKS works |
-| **CEL for MCP authorization** | `claims.scp.exists()` expressions match JWT scopes to tool operations |
-| **Agent loop pattern** | Discover tools → LLM → tool calls → LLM → response |
-| **Path-based LLM routing** | `/anthropic/v1/*` and `/openai/v1/*` on LLM gateway |
+| **No AgentCore Gateway** | AgentGateway handles all auth — portable across clouds |
+| **client_credentials grant** | Agent authenticates as service account, simpler than OBO |
+| **Okta issuer = oauth2/default** | Canonical issuer in JWT is `oauth2/default`, not the server ID |
+| **GitHub-only MCP** | Focused demo — creates issues on ProfessorSeb/ai-kagent-demo |
+| **MCP session IDs** | Required for stateful MCP protocol after initialize |
+| **SSE response parsing** | AgentGateway returns MCP responses as Server-Sent Events |
+| **arm64 images only** | AgentCore runtime requirement |
+| **update-agent-runtime replaces env vars** | Must include `--environment-variables` on every update |
 
 ## Tracing & Observability
 
-Every request through AgentGateway is traced via OpenTelemetry. A fan-out OTel Collector duplicates traces to two backends simultaneously:
+Every request through AgentGateway is traced via OpenTelemetry:
 
 ```
 Agent → AgentGateway → OTel Collector (fan-out)
-                           ├──► Langfuse (OTLP HTTP) — LLM-native observability
-                           │      • Token usage, cost tracking
-                           │      • Prompt/completion logging
-                           │      • Trace waterfall with tool calls
-                           │      • Self-hosted at http://172.16.10.173:3000
-                           │
-                           └──► ClickHouse (Solo UI) — AgentGateway-native dashboards
-                                  • Gateway metrics and route analytics
-                                  • Policy evaluation results
-                                  • Rate limiting stats
+                           ├──► Langfuse — LLM analytics (tokens, cost, prompts)
+                           └──► ClickHouse — Gateway metrics (routes, policies, rates)
 ```
 
-### What Gets Captured
-
-| Signal | Source | Destination |
-|--------|--------|-------------|
-| LLM request/response spans | AgentGateway proxy | Langfuse + ClickHouse |
-| MCP tool call spans | AgentGateway MCP gateway | Langfuse + ClickHouse |
-| Policy evaluation (PII, injection) | AgentGateway policies | ClickHouse (Solo UI) |
-| Token usage & model info | AgentGateway proxy | Langfuse |
-| Gateway route/endpoint metadata | AgentGateway | Both |
-
-### Why Dual Export?
-
-- **Langfuse** gives LLM-focused observability: cost tracking, prompt analysis, trace waterfalls with tool call chains — ideal for debugging agent behavior
-- **ClickHouse (Solo UI)** gives infrastructure-focused observability: gateway metrics, policy enforcement stats, rate limiting — ideal for ops
-
-The fan-out collector is a separate OTel Collector deployment that avoids conflicts with AgentGateway's Helm-managed ConfigMap (managed by ArgoCD).
+All traces include `jwt.sub` for identity attribution.
