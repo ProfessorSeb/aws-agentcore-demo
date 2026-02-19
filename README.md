@@ -60,7 +60,7 @@ graph TD
     Runtime --> Agent[Agent v0.5.0]
     Agent --> Okta[Okta JWT<br/>Service/OBO]
     Agent --> Gateway[AgentGateway<br/>JWT + RBAC]
-    Gateway --> Header[X-AgentGateway-Auth Header]
+    Gateway --> JWT[JWT Backend Injected]
     Gateway --> LLM[LLM Proxy<br/>Anthropic/OpenAI]
     Gateway --> MCP[Everything MCP<br/>50+ tools]
     MCP --> Tools[GitHub/Slack/Tools]
