@@ -56,12 +56,14 @@ OKTA_SCOPES = os.getenv("OKTA_SCOPES", "mcp:read mcp:write")
 SYSTEM_PROMPT = """You are a DevOps Copilot agent. You help with infrastructure management,
 deployment pipelines, monitoring, and troubleshooting.
 
-You have access to MCP tools via AgentGateway:
-- Slack tools: post messages, read channels, manage conversations
-- GitHub tools: manage issues, PRs, repositories
-- General MCP tools: various utilities
+You have access to GitHub MCP tools via AgentGateway:
+- Create, list, and manage issues
+- Create and manage pull requests
+- Browse repositories, files, and code
 
-When a user asks you to do something, use the appropriate tools.
+Default repository: ProfessorSeb/ai-kagent-demo
+
+When a user asks you to do something, use the appropriate GitHub tools.
 Be concise and actionable in your responses."""
 
 # HTTP client with connection pooling
@@ -311,8 +313,6 @@ def mcp_tools_to_openai_format(mcp_tools: list[dict]) -> list[dict]:
 TOOL_ROUTE_MAP: dict[str, str] = {}
 
 MCP_ENDPOINTS = {
-    "/mcp": "Everything MCP server",
-    "/mcp/slack": "Slack MCP tools",
     "/mcp-github": "GitHub MCP tools",
 }
 
