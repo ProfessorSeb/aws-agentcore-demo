@@ -51,3 +51,17 @@ cd ../k8s-rooster  # ArgoCD syncs AgentGateway
 ```
 
 **Live from repo!** terraform → runtime → ngrok gateway. Fork & run.
+
+## Architecture Flow
+```mermaid
+graph TD
+    User[User/App] --> IAM[AWS IAM]
+    IAM --> Runtime[AgentCore Runtime v13]
+    Runtime --> Agent[Agent v0.5.0]
+    Agent --> Okta[Okta JWT<br/>Service/OBO]
+    Agent --> Gateway[AgentGateway<br/>JWT + RBAC]
+    Gateway --> Header[X-AgentGateway-Auth Header]
+    Gateway --> LLM[LLM Proxy<br/>Anthropic/OpenAI]
+    Gateway --> MCP[Everything MCP<br/>50+ tools]
+    MCP --> Tools[GitHub/Slack/Tools]
+```
