@@ -53,12 +53,13 @@ resource "okta_auth_server_scope" "mcp_admin" {
 
 resource "okta_app_oauth" "agentcore_client" {
   label                      = "${var.project_name}-client"
-  type                       = "web"
+  type                       = "native"
   grant_types                = ["authorization_code", "refresh_token"]
-  redirect_uris              = [var.agent_redirect_uri]
+  redirect_uris              = [var.agent_redirect_uri, "http://localhost:8888/callback"]
   post_logout_redirect_uris  = [var.agent_post_logout_uri]
-  token_endpoint_auth_method = "client_secret_basic"
+  token_endpoint_auth_method = "none"
   response_types             = ["code"]
+  pkce_required              = true
 }
 
 ###############################################################################
@@ -69,7 +70,7 @@ resource "okta_app_oauth" "agentcore_client" {
 resource "okta_app_oauth" "agentcore_service" {
   label                      = "${var.project_name}-service"
   type                       = "service"
-  grant_types                = ["client_credentials"]
+  grant_types                = ["client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"]
   token_endpoint_auth_method = "client_secret_basic"
   response_types             = ["token"]
 }
@@ -98,7 +99,7 @@ resource "okta_auth_server_policy_rule" "agentcore_rule" {
   policy_id                     = okta_auth_server_policy.agentcore.id
   name                          = "Allow MCP scopes"
   priority                      = 1
-  grant_type_whitelist          = ["authorization_code", "client_credentials"]
+  grant_type_whitelist          = ["authorization_code", "client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"]
   scope_whitelist               = ["openid", "profile", "email", "mcp:read", "mcp:write", "mcp:admin"]
   group_whitelist               = [data.okta_group.everyone.id]
   access_token_lifetime_minutes   = 60
@@ -146,4 +147,9 @@ output "okta_service_client_secret" {
   description = "Agent service client secret (set as OKTA_CLIENT_SECRET in agent env)"
   value       = okta_app_oauth.agentcore_service.client_secret
   sensitive   = true
+}
+
+output "okta_authorize_url" {
+  description = "Authorization endpoint for user login (PKCE flow)"
+  value       = "https://${var.okta_org_name}.${var.okta_base_url}/oauth2/${data.okta_auth_server.default.id}/v1/authorize"
 }

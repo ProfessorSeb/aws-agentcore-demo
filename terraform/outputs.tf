@@ -12,11 +12,6 @@ output "agentcore_runtime_role_arn" {
   value       = aws_iam_role.agentcore_runtime.arn
 }
 
-output "agentcore_gateway_role_arn" {
-  description = "IAM role ARN for the AgentCore gateway"
-  value       = aws_iam_role.agentcore_gateway.arn
-}
-
 # Note: Runtime ID, Endpoint ID, and Gateway ID are stored in local files
 # (runtime_id.txt, endpoint_id.txt, gateway_id.txt) by the null_resource provisioners.
 # Read them with: cat terraform/runtime_id.txt

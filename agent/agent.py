@@ -4,19 +4,19 @@ DevOps Copilot Agent — AWS Bedrock AgentCore demo agent.
 Architecture:
   AgentCore Runtime → This Agent → AgentGateway (LLM + MCP)
                                        ↓              ↓
-                                   Anthropic      Slack/GitHub/MCP
+                                   Anthropic      GitHub MCP
                                                        ↑
                                                   Okta JWT auth
-                                                  (client_credentials)
 
 The agent uses AgentGateway as both:
 1. LLM proxy (OpenAI-compatible) → /anthropic/v1/chat/completions
-2. MCP tool gateway → /mcp/slack, /mcp-github, /mcp
+2. MCP tool gateway → /mcp-github
 
-Auth model:
+Auth model (dual mode):
 - LLM calls: No auth needed — AgentGateway holds provider API keys
-- MCP calls: Okta JWT (client_credentials) — AgentGateway validates via
-  EnterpriseAgentgatewayPolicy with scope-based RBAC
+- MCP calls (service): Okta JWT via client_credentials — agent identity only
+- MCP calls (OBO): Okta Token Exchange (RFC 8693) — retains user identity
+  User token → agent exchanges for delegated token → AgentGateway sees user
 """
 
 import json
@@ -33,7 +33,7 @@ from fastapi.responses import JSONResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="DevOps Copilot Agent", version="0.3.0")
+app = FastAPI(title="DevOps Copilot Agent", version="0.4.0")
 
 # --- Configuration via environment ---
 AGENT_NAME = os.getenv("AGENT_NAME", "DevOps Copilot")
@@ -78,11 +78,9 @@ _token_cache: dict[str, Any] = {"access_token": None, "expires_at": 0}
 
 
 async def get_okta_token() -> str:
-    """Get a valid Okta access token, refreshing if expired.
+    """Get a valid Okta access token via client_credentials, refreshing if expired.
 
-    Uses client_credentials grant — the agent authenticates as a service
-    account. AgentGateway validates the JWT and enforces scope-based RBAC
-    on MCP tool calls.
+    Used as the default (service identity) when no user token is provided.
     """
     # Return cached token if still valid (with 5-min buffer)
     if _token_cache["access_token"] and time.time() < _token_cache["expires_at"] - 300:
@@ -120,6 +118,71 @@ async def get_okta_token() -> str:
         return ""
 
 
+# OBO token cache — keyed by user token hash to avoid leaking tokens in keys
+_obo_token_cache: dict[str, dict[str, Any]] = {}
+
+
+async def exchange_token_obo(user_token: str) -> str:
+    """Exchange a user's access token for a delegated OBO token (RFC 8693).
+
+    The agent presents the user's token to Okta and gets back a new token
+    that carries the user's identity (sub, email, groups) but is scoped
+    for the agent's downstream calls. AgentGateway sees WHO the user is.
+
+    Flow: User token → Okta Token Exchange → Delegated JWT → AgentGateway
+    """
+    import hashlib
+    cache_key = hashlib.sha256(user_token.encode()).hexdigest()[:16]
+
+    # Check cache
+    cached = _obo_token_cache.get(cache_key)
+    if cached and time.time() < cached["expires_at"] - 300:
+        logger.info("Using cached OBO token for user")
+        return cached["access_token"]
+
+    if not OKTA_TOKEN_URL or not OKTA_CLIENT_ID or not OKTA_CLIENT_SECRET:
+        logger.warning("Okta credentials not configured — falling back to client_credentials")
+        return await get_okta_token()
+
+    logger.info("Exchanging user token for OBO token via RFC 8693 Token Exchange")
+
+    try:
+        resp = await http_client.post(
+            OKTA_TOKEN_URL,
+            data={
+                "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+                "subject_token": user_token,
+                "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "scope": OKTA_SCOPES,
+                "audience": "api://agentgateway",
+            },
+            auth=(OKTA_CLIENT_ID, OKTA_CLIENT_SECRET),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        access_token = data["access_token"]
+        expires_in = data.get("expires_in", 3600)
+        _obo_token_cache[cache_key] = {
+            "access_token": access_token,
+            "expires_at": time.time() + expires_in,
+        }
+
+        logger.info("OBO token obtained (expires in %ds, token_type=%s)",
+                     expires_in, data.get("issued_token_type", "unknown"))
+        return access_token
+
+    except httpx.HTTPStatusError as e:
+        logger.error("OBO token exchange failed %d: %s", e.response.status_code, e.response.text[:500])
+        logger.info("Falling back to client_credentials")
+        return await get_okta_token()
+    except Exception as e:
+        logger.error("OBO token exchange error: %s", e)
+        logger.info("Falling back to client_credentials")
+        return await get_okta_token()
+
+
 # =============================================================================
 # LLM Gateway Integration
 # =============================================================================
@@ -146,7 +209,7 @@ async def call_llm(
 
     headers = {
         "ngrok-skip-browser-warning": "true",
-        "User-Agent": "devops-copilot-agent/0.3.0",
+        "User-Agent": "devops-copilot-agent/0.4.0",
     }
 
     try:
@@ -167,15 +230,25 @@ async def call_llm(
 # MCP Tool Integration
 # =============================================================================
 
-async def _mcp_headers() -> dict[str, str]:
-    """Build headers for MCP requests, including Okta JWT if configured."""
+async def _mcp_headers(user_token: str | None = None) -> dict[str, str]:
+    """Build headers for MCP requests, including Okta JWT.
+
+    If user_token is provided, uses OBO Token Exchange to get a delegated
+    token that retains the user's identity. Otherwise falls back to
+    client_credentials (service identity only).
+    """
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
         "ngrok-skip-browser-warning": "true",
-        "User-Agent": "devops-copilot-agent/0.3.0",
+        "User-Agent": "devops-copilot-agent/0.4.0",
     }
-    token = await get_okta_token()
+    if user_token:
+        token = await exchange_token_obo(user_token)
+        logger.info("Using OBO token (user identity preserved)")
+    else:
+        token = await get_okta_token()
+        logger.info("Using client_credentials token (service identity)")
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers
@@ -185,10 +258,10 @@ async def _mcp_headers() -> dict[str, str]:
 MCP_SESSION_IDS: dict[str, str] = {}
 
 
-async def discover_mcp_tools(path: str = "/mcp") -> list[dict]:
+async def discover_mcp_tools(path: str = "/mcp", user_token: str | None = None) -> list[dict]:
     """Discover available tools from an MCP endpoint via AgentGateway."""
     url = f"{MCP_GATEWAY_URL}{path}"
-    headers = await _mcp_headers()
+    headers = await _mcp_headers(user_token)
 
     try:
         # MCP tool discovery — POST with initialize, capture session ID
@@ -196,7 +269,7 @@ async def discover_mcp_tools(path: str = "/mcp") -> list[dict]:
             url,
             json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                 "protocolVersion": "2025-03-26",
-                "clientInfo": {"name": "devops-copilot", "version": "0.3.0"},
+                "clientInfo": {"name": "devops-copilot", "version": "0.4.0"},
                 "capabilities": {},
             }},
             headers=headers,
@@ -261,10 +334,10 @@ def _parse_sse_or_json(resp: httpx.Response) -> dict:
         return {}
 
 
-async def call_mcp_tool(path: str, tool_name: str, arguments: dict) -> Any:
+async def call_mcp_tool(path: str, tool_name: str, arguments: dict, user_token: str | None = None) -> Any:
     """Call an MCP tool via AgentGateway."""
     url = f"{MCP_GATEWAY_URL}{path}"
-    headers = await _mcp_headers()
+    headers = await _mcp_headers(user_token)
 
     # Include session ID if we have one for this endpoint
     session_id = MCP_SESSION_IDS.get(path, "")
@@ -317,13 +390,13 @@ MCP_ENDPOINTS = {
 }
 
 
-async def discover_all_tools() -> list[dict]:
+async def discover_all_tools(user_token: str | None = None) -> list[dict]:
     """Discover tools from all MCP endpoints and build routing map."""
     all_tools = []
     TOOL_ROUTE_MAP.clear()
 
     for path, desc in MCP_ENDPOINTS.items():
-        tools = await discover_mcp_tools(path)
+        tools = await discover_mcp_tools(path, user_token)
         for tool in tools:
             TOOL_ROUTE_MAP[tool["name"]] = path
         all_tools.extend(tools)
@@ -337,16 +410,22 @@ async def discover_all_tools() -> list[dict]:
 # Agent Loop — LLM + Tool Use
 # =============================================================================
 
-async def agent_loop(user_input: str, session_id: str) -> str:
+async def agent_loop(user_input: str, session_id: str, user_token: str | None = None) -> str:
     """
     Main agent loop:
     1. Discover MCP tools (authenticated via Okta JWT)
     2. Send user message + tools to LLM (no auth needed)
     3. If LLM wants to call a tool → call it via MCP → feed result back
     4. Repeat until LLM gives a final text response
+
+    If user_token is provided, uses OBO Token Exchange so AgentGateway
+    sees the user's identity. Otherwise uses client_credentials.
     """
+    auth_mode = "OBO (user identity)" if user_token else "client_credentials (service identity)"
+    logger.info("Agent loop starting — auth mode: %s", auth_mode)
+
     # Discover available tools
-    mcp_tools = await discover_all_tools()
+    mcp_tools = await discover_all_tools(user_token)
     openai_tools = mcp_tools_to_openai_format(mcp_tools)
 
     messages = [
@@ -380,7 +459,7 @@ async def agent_loop(user_input: str, session_id: str) -> str:
 
                 # Route to correct MCP endpoint
                 mcp_path = TOOL_ROUTE_MAP.get(tool_name, "/mcp")
-                tool_result = await call_mcp_tool(mcp_path, tool_name, tool_args)
+                tool_result = await call_mcp_tool(mcp_path, tool_name, tool_args, user_token)
 
                 # Add tool result to messages
                 messages.append({
@@ -406,15 +485,18 @@ async def agent_loop(user_input: str, session_id: str) -> str:
 @app.get("/health")
 async def health():
     """Health check for AgentCore runtime."""
-    return {"status": "healthy", "agent": AGENT_NAME, "version": "0.3.0"}
+    return {"status": "healthy", "agent": AGENT_NAME, "version": "0.4.0"}
 
 
 @app.post("/invocations")
 async def invoke(request: Request):
     """Main invocation endpoint for AgentCore.
 
-    AgentCore sends requests here. The agent authenticates to AgentGateway
-    independently using its own Okta service account credentials.
+    Supports two auth modes:
+    1. Service identity (default): Agent uses client_credentials to get its own JWT
+    2. On-Behalf-Of: If 'user_token' is in the payload, agent exchanges it via
+       RFC 8693 Token Exchange to get a delegated JWT that preserves user identity.
+       AgentGateway can then enforce per-user RBAC policies.
     """
     try:
         body = await request.json()
@@ -426,15 +508,26 @@ async def invoke(request: Request):
                 content={"error": "Missing 'input' or 'prompt' in request body"},
             )
 
-        session_id = body.get("session_id", f"session-{datetime.now(timezone.utc).isoformat()}")
-        logger.info("Invocation received: session=%s input=%s", session_id, user_input[:100])
+        # Extract user token if provided (enables OBO flow)
+        user_token = body.get("user_token", None)
+        # Also check Authorization header (for direct HTTP callers)
+        if not user_token:
+            auth_header = request.headers.get("X-User-Token", "")
+            if auth_header:
+                user_token = auth_header
 
-        response = await agent_loop(user_input, session_id)
+        session_id = body.get("session_id", f"session-{datetime.now(timezone.utc).isoformat()}")
+        auth_mode = "OBO" if user_token else "service"
+        logger.info("Invocation received: session=%s auth=%s input=%s",
+                     session_id, auth_mode, user_input[:100])
+
+        response = await agent_loop(user_input, session_id, user_token)
 
         return JSONResponse(content={
             "output": response,
             "session_id": session_id,
             "agent": AGENT_NAME,
+            "auth_mode": auth_mode,
         })
 
     except Exception as e:
@@ -447,7 +540,7 @@ async def invoke(request: Request):
 
 @app.get("/")
 async def root():
-    return {"agent": AGENT_NAME, "version": "0.3.0", "status": "running"}
+    return {"agent": AGENT_NAME, "version": "0.4.0", "status": "running"}
 
 
 if __name__ == "__main__":
